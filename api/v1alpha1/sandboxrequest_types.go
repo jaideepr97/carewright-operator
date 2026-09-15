@@ -1,0 +1,172 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1alpha1
+
+import (
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// SandboxGatewaySpec selects the OpenShell gateway used for a request.
+// Name selects a locally registered gateway, while endpoint connects directly.
+type SandboxGatewaySpec struct {
+	// Name is the name of a gateway registered with the OpenShell CLI.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Endpoint is the URL of an OpenShell gateway.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// Insecure permits an unencrypted direct gateway connection.
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
+}
+
+// SandboxResources describes resources passed to OpenShell when creating a sandbox.
+type SandboxResources struct {
+	// CPU is an OpenShell CPU quantity, for example "500m" or "2".
+	// +optional
+	CPU string `json:"cpu,omitempty"`
+
+	// Memory is an OpenShell memory quantity, for example "512Mi" or "2Gi".
+	// +optional
+	Memory string `json:"memory,omitempty"`
+
+	// GPU is the number of GPUs requested by the sandbox.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	GPU *int32 `json:"gpu,omitempty"`
+}
+
+// SandboxRequestSpec defines an OpenShell sandbox and the process it should run.
+// The environment map is intended for non-secret values. OpenShell providers should
+// be used to make credentials available to the sandbox.
+// +kubebuilder:validation:XValidation:rule="!has(self.gateway) || !(has(self.gateway.name) && has(self.gateway.endpoint))",message="gateway.name and gateway.endpoint are mutually exclusive"
+type SandboxRequestSpec struct {
+	// SandboxName overrides the OpenShell sandbox name. It defaults to metadata.name.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +optional
+	SandboxName string `json:"sandboxName,omitempty"`
+
+	// Gateway selects the OpenShell gateway. The CLI's active gateway is used when omitted.
+	// +optional
+	Gateway SandboxGatewaySpec `json:"gateway,omitempty"`
+
+	// Workspace is the OpenShell workspace containing the sandbox.
+	// +kubebuilder:default="default"
+	// +optional
+	Workspace string `json:"workspace,omitempty"`
+
+	// Image is the container image used to create the sandbox.
+	// +kubebuilder:validation:MinLength=1
+	Image string `json:"image"`
+
+	// Command is the command and arguments executed in the sandbox.
+	// +optional
+	Command []string `json:"command,omitempty"`
+
+	// PolicyRef selects an OpenShell policy stored in a ConfigMap in this namespace.
+	// +optional
+	PolicyRef *corev1.ConfigMapKeySelector `json:"policyRef,omitempty"`
+
+	// Providers are OpenShell provider names used to inject credentials securely.
+	// +optional
+	Providers []string `json:"providers,omitempty"`
+
+	// Env contains non-secret environment variables passed to the sandbox.
+	// +optional
+	Env map[string]string `json:"env,omitempty"`
+
+	// Resources requests CPU, memory, and GPU resources for the sandbox.
+	// +optional
+	Resources SandboxResources `json:"resources,omitempty"`
+
+	// Labels are attached to the OpenShell sandbox.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// ApprovalMode controls how OpenShell handles tool approval requests.
+	// +kubebuilder:validation:Enum=manual;auto
+	// +optional
+	ApprovalMode string `json:"approvalMode,omitempty"`
+}
+
+// SandboxRequestStatus defines the observed OpenShell sandbox state.
+type SandboxRequestStatus struct {
+	// SandboxName is the effective OpenShell sandbox name.
+	// +optional
+	SandboxName string `json:"sandboxName,omitempty"`
+
+	// SandboxID is the identifier reported by OpenShell.
+	// +optional
+	SandboxID string `json:"sandboxID,omitempty"`
+
+	// Gateway is the gateway location where the observed sandbox was created.
+	// +optional
+	Gateway SandboxGatewaySpec `json:"gateway,omitempty"`
+
+	// Workspace is the workspace where the observed sandbox was created.
+	// +optional
+	Workspace string `json:"workspace,omitempty"`
+
+	// Phase is the state reported by OpenShell.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+
+	// SpecHash identifies the request and policy content used to create the sandbox.
+	// +optional
+	SpecHash string `json:"specHash,omitempty"`
+
+	// ObservedGeneration is the most recent generation processed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions describe whether the sandbox is available or reconciliation failed.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Sandbox",type=string,JSONPath=`.status.sandboxName`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// SandboxRequest is the Schema for the sandboxrequests API.
+type SandboxRequest struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   SandboxRequestSpec   `json:"spec,omitempty"`
+	Status SandboxRequestStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// SandboxRequestList contains a list of SandboxRequest.
+type SandboxRequestList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []SandboxRequest `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(&SandboxRequest{}, &SandboxRequestList{})
+}

@@ -5,10 +5,19 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - apps.cpgtoacp.io
   resources:
   - careplanwriters
   - cpgingesters
+  - sandboxrequests
   verbs:
   - create
   - delete
@@ -22,6 +31,7 @@ rules:
   resources:
   - careplanwriters/finalizers
   - cpgingesters/finalizers
+  - sandboxrequests/finalizers
   verbs:
   - update
 - apiGroups:
@@ -29,6 +39,7 @@ rules:
   resources:
   - careplanwriters/status
   - cpgingesters/status
+  - sandboxrequests/status
   verbs:
   - get
   - patch

@@ -1,8 +1,31 @@
 # cpgtoacp-operator
-// TODO(user): Add simple overview of use/purpose
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+
+The cpgtoacp operator manages the CPG Ingester and Care Plan Writer pipelines.
+Pipeline components are represented as OpenShell `SandboxRequest` resources so
+they run as policy-controlled sandboxes rather than ordinary Deployments.
+
+## OpenShell sandboxes
+
+A `SandboxRequest` declares an image, command, non-secret environment values,
+resource limits, credential providers, and an optional policy stored in a
+ConfigMap. The controller uses the OpenShell CLI to create and observe the
+sandbox. It replaces the sandbox when the request or referenced policy changes
+and deletes it when the request is deleted.
+
+For local development, install the OpenShell CLI and make sure its active
+gateway is reachable before running `make run`. The operator container includes
+the CLI; in-cluster requests should normally set `spec.gateway.endpoint` to a
+gateway URL reachable from the manager pod. `gateway.name` and
+`gateway.endpoint` are mutually exclusive.
+
+Environment values in `spec.env` are passed on the command line and must not
+contain secrets. Attach configured OpenShell credential providers through
+`spec.providers` instead.
+
+See `config/samples/apps_v1alpha1_sandboxrequest.yaml` for a minimal request and
+ConfigMap-backed policy.
 
 ## Getting Started
 
@@ -132,4 +155,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-

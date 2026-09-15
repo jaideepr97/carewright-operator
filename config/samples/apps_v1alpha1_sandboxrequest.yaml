@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: sandboxrequest-sample-policy
+data:
+  policy.yaml: |
+    version: 1
+    filesystem_policy:
+      read_only: [/usr, /lib, /lib64, /etc, /opt, /bin, /sbin]
+      read_write: [/sandbox, /tmp, /dev, /run, /var, /home]
+---
+apiVersion: apps.cpgtoacp.io/v1alpha1
+kind: SandboxRequest
+metadata:
+  labels:
+    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: sandboxrequest-sample
+spec:
+  image: docker.io/library/busybox:1.37
+  command: [sh, -c, "while true; do sleep 3600; done"]
+  policyRef:
+    name: sandboxrequest-sample-policy
+    key: policy.yaml
+  env:
+    LOG_LEVEL: info
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  labels:
+    app.kubernetes.io/component: sample

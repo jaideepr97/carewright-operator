@@ -4,6 +4,7 @@
 resources:
 - bases/apps.cpgtoacp.io_cpgingesters.yaml
 - bases/apps.cpgtoacp.io_careplanwriters.yaml
+- bases/apps.cpgtoacp.io_sandboxrequests.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

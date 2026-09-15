@@ -23,11 +23,28 @@ COPY internal/ internal/
 # by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 
+# Fetch the static OpenShell CLI used by the SandboxRequest controller.
+FROM alpine:3.22 AS openshell-cli
+ARG TARGETARCH
+ARG OPENSHELL_VERSION=v0.0.111
+RUN apk add --no-cache curl \
+    && case "${TARGETARCH}" in \
+         amd64) openshell_arch=x86_64; openshell_sha=eea22e10a1d21c92c843c609e2a391456073b339ebc5e1fca293aff4a0d6dcdc ;; \
+         arm64) openshell_arch=aarch64; openshell_sha=5e9689f5e3522e84bd6e12fc48594046f312f356dc2f1779f628eb42e8259bf5 ;; \
+         *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && openshell_archive="openshell-${openshell_arch}-unknown-linux-musl.tar.gz" \
+    && curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/download/${OPENSHELL_VERSION}/${openshell_archive}" -o "/tmp/${openshell_archive}" \
+    && echo "${openshell_sha}  /tmp/${openshell_archive}" | sha256sum -c - \
+    && tar -xzf "/tmp/${openshell_archive}" -C /usr/local/bin openshell \
+    && chmod 0755 /usr/local/bin/openshell
+
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
+COPY --from=openshell-cli /usr/local/bin/openshell /usr/local/bin/openshell
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

@@ -29,4 +29,13 @@ resources:
   kind: CarePlanWriter
   path: cpgtoacp.io/cpgtoacp-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: cpgtoacp.io
+  group: apps
+  kind: SandboxRequest
+  path: cpgtoacp.io/cpgtoacp-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

@@ -2,4 +2,5 @@
 resources:
 - apps_v1alpha1_cpgingester.yaml
 - apps_v1alpha1_careplanwriter.yaml
+- apps_v1alpha1_sandboxrequest.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
