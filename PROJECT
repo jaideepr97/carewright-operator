@@ -10,4 +10,21 @@ plugins:
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: cpgtoacp-operator
 repo: cpgtoacp.io/cpgtoacp-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: cpgtoacp.io
+  group: apps
+  kind: CPGIngester
+  path: cpgtoacp.io/cpgtoacp-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: cpgtoacp.io
+  group: apps
+  kind: CarePlanWriter
+  path: cpgtoacp.io/cpgtoacp-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

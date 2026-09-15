@@ -1,0 +1,163 @@
+apiVersion: apps.cpgtoacp.io/v1alpha1
+kind: CPGIngester
+metadata:
+  labels:
+    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: cpgingester-sample
+spec:
+  ingestion:
+    image: quay.io/cpgtoacp/cpg-ingester-ingestion:latest
+    env:
+      - name: MLFLOW_TRACKING_URI
+        value: http://mlflow:5000
+      - name: ARTIFACT_STORE_URL
+        value: http://minio:9000
+      - name: ARTIFACT_STORE_BUCKET
+        value: cpg-artifacts
+      - name: ARTIFACT_STORE_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_ACCESS_KEY
+      - name: ARTIFACT_STORE_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_SECRET_KEY
+      - name: LOG_LEVEL
+        value: DEBUG
+      - name: DOCLING_LOG_LEVEL
+        value: DEBUG
+      - name: PYTHONUNBUFFERED
+        value: "1"
+      - name: DOCLING_CACHE_DIR
+        value: /app/.cache/docling
+      - name: DOCLING_ARTIFACTS_PATH
+        value: /app/.cache/docling/models
+      - name: HF_HUB_ENABLE_HF_TRANSFER
+        value: "0"
+      - name: HF_HUB_OFFLINE
+        value: "1"
+      - name: INGESTION_OCR_ENABLED
+        value: "true"
+  llmAnalysis:
+    image: quay.io/cpgtoacp/cpg-ingester-llm:latest
+    env:
+      - name: MLFLOW_TRACKING_URI
+        value: http://mlflow:5000
+      - name: ARTIFACT_STORE_URL
+        value: http://minio:9000
+      - name: ARTIFACT_STORE_BUCKET
+        value: cpg-artifacts
+      - name: ARTIFACT_STORE_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_ACCESS_KEY
+      - name: ARTIFACT_STORE_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_SECRET_KEY
+      - name: PYTHONPATH
+        value: /app/src
+      - name: LITELLM_URL
+        value: http://litellm:4000
+      - name: LLM_MODEL
+        value: default
+      - name: LLM_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: llm-credentials
+            key: LLM_API_KEY
+      - name: LLM_REQUEST_TIMEOUT
+        value: "600"
+      - name: FIGURE_INTERPRETATION_ENABLED
+        value: "true"
+      - name: FIGURE_INTERPRETATION_MAX_FIGURES
+        value: "100"
+  assembly:
+    image: quay.io/cpgtoacp/cpg-ingester-assembly:latest
+    env:
+      - name: MLFLOW_TRACKING_URI
+        value: http://mlflow:5000
+      - name: ARTIFACT_STORE_URL
+        value: http://minio:9000
+      - name: ARTIFACT_STORE_BUCKET
+        value: cpg-artifacts
+      - name: ARTIFACT_STORE_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_ACCESS_KEY
+      - name: ARTIFACT_STORE_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_SECRET_KEY
+      - name: PYTHONPATH
+        value: /app/src
+  delivery:
+    image: quay.io/cpgtoacp/cpg-ingester-delivery:latest
+    env:
+      - name: MLFLOW_TRACKING_URI
+        value: http://mlflow:5000
+      - name: ARTIFACT_STORE_URL
+        value: http://minio:9000
+      - name: ARTIFACT_STORE_BUCKET
+        value: cpg-artifacts
+      - name: ARTIFACT_STORE_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_ACCESS_KEY
+      - name: ARTIFACT_STORE_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_SECRET_KEY
+      - name: PYTHONPATH
+        value: /app/src
+  bff:
+    image: quay.io/cpgtoacp/cpg-ingester-bff:latest
+    env:
+      - name: MLFLOW_TRACKING_URI
+        value: http://mlflow:5000
+      - name: SONATAFLOW_URL
+        value: http://cpgingester:80
+      - name: MINIO_ENDPOINT
+        value: http://minio:9000
+      - name: DATA_INDEX_URL
+        value: ""
+      - name: ACP_WRITER_BFF_URL
+        value: http://acp-bff:8080
+      - name: ARTIFACT_STORE_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_ACCESS_KEY
+      - name: ARTIFACT_STORE_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: minio-credentials
+            key: ARTIFACT_STORE_SECRET_KEY
+      - name: PYTHONPATH
+        value: /app/src
+  ui:
+    image: quay.io/cpgtoacp/cpg-ingester-ui:latest
+    env:
+      - name: BFF_HOST
+        value: cpg-ingester-bff:8080
+  workflow:
+    env:
+      - name: INGESTION_URL
+        value: http://cpg-ingester-ingestion:8080
+      - name: LLM_ANALYSIS_URL
+        value: http://cpg-ingester-llm-analysis:8080
+      - name: ASSEMBLY_URL
+        value: http://cpg-ingester-assembly:8080
+      - name: PUBLISH_URL
+        value: http://cpg-ingester-delivery:8080
+      - name: BFF_URL
+        value: http://cpg-ingester-bff:8080
