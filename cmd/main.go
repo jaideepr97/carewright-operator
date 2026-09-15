@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
+	"cpgtoacp.io/cpgtoacp-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -201,6 +202,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.CPGIngesterReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CPGIngester")
+		os.Exit(1)
+	}
+	if err := (&controller.CarePlanWriterReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CarePlanWriter")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

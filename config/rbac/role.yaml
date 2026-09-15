@@ -3,4 +3,33 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: manager-role
-rules: []
+rules:
+- apiGroups:
+  - apps.cpgtoacp.io
+  resources:
+  - careplanwriters
+  - cpgingesters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.cpgtoacp.io
+  resources:
+  - careplanwriters/finalizers
+  - cpgingesters/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - apps.cpgtoacp.io
+  resources:
+  - careplanwriters/status
+  - cpgingesters/status
+  verbs:
+  - get
+  - patch
+  - update
