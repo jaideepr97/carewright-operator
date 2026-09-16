@@ -19,8 +19,10 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -47,6 +49,36 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+const (
+	controllerCPGIngester    = "cpgingester"
+	controllerCarePlanWriter = "careplanwriter"
+	controllerSandboxRequest = "sandboxrequest"
+)
+
+func parseControllerSelection(value string) (map[string]bool, error) {
+	available := map[string]bool{
+		controllerCPGIngester:    true,
+		controllerCarePlanWriter: true,
+		controllerSandboxRequest: true,
+	}
+	if strings.TrimSpace(value) == "all" {
+		return available, nil
+	}
+
+	selected := make(map[string]bool)
+	for _, item := range strings.Split(value, ",") {
+		name := strings.TrimSpace(item)
+		if name == "all" {
+			return nil, fmt.Errorf("controller %q cannot be combined with specific controllers", name)
+		}
+		if !available[name] {
+			return nil, fmt.Errorf("unknown controller %q", name)
+		}
+		selected[name] = true
+	}
+	return selected, nil
+}
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
@@ -64,6 +96,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var openShellCLIPath string
+	var controllers string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -84,6 +117,8 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&openShellCLIPath, "openshell-cli-path", "openshell",
 		"Path to the OpenShell CLI executable used by the SandboxRequest controller.")
+	flag.StringVar(&controllers, "controllers", "all",
+		"Comma-separated controllers to run: cpgingester, careplanwriter, sandboxrequest, or all.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -91,6 +126,11 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	selectedControllers, err := parseControllerSelection(controllers)
+	if err != nil {
+		setupLog.Error(err, "invalid controller selection", "controllers", controllers)
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -205,27 +245,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.CPGIngesterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CPGIngester")
-		os.Exit(1)
+	if selectedControllers[controllerCPGIngester] {
+		if err := (&controller.CPGIngesterReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "CPGIngester")
+			os.Exit(1)
+		}
 	}
-	if err := (&controller.CarePlanWriterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CarePlanWriter")
-		os.Exit(1)
+	if selectedControllers[controllerCarePlanWriter] {
+		if err := (&controller.CarePlanWriterReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "CarePlanWriter")
+			os.Exit(1)
+		}
 	}
-	if err := (&controller.SandboxRequestReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Runner: controller.ExecOpenShellRunner{Path: openShellCLIPath},
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "SandboxRequest")
-		os.Exit(1)
+	if selectedControllers[controllerSandboxRequest] {
+		if err := (&controller.SandboxRequestReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+			Runner: controller.ExecOpenShellRunner{Path: openShellCLIPath},
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "SandboxRequest")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

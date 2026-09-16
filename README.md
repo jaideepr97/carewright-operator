@@ -35,6 +35,13 @@ the CLI; in-cluster requests should normally set `spec.gateway.endpoint` to a
 gateway URL reachable from the manager pod. `gateway.name` and
 `gateway.endpoint` are mutually exclusive.
 
+For focused local development, run only selected controllers with
+`--controllers`. For example, start only the SandboxRequest controller with:
+
+```sh
+go run ./cmd/main.go --controllers=sandboxrequest
+```
+
 Environment values in `spec.env` are passed on the command line and must not
 contain secrets. Attach configured OpenShell credential providers through
 `spec.providers` instead.
