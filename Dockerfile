@@ -1,5 +1,7 @@
-# Build the manager binary
-FROM golang:1.24 AS builder
+# Build the manager binary on the host architecture and cross-compile it for
+# the requested target. This avoids relying on QEMU during multi-arch builds.
+ARG BUILDPLATFORM
+FROM --platform=${BUILDPLATFORM} golang:1.24 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -23,8 +25,9 @@ COPY internal/ internal/
 # by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 
-# Fetch the static OpenShell CLI used by the SandboxRequest controller.
-FROM alpine:3.22 AS openshell-cli
+# Fetch the target architecture's static OpenShell CLI while keeping the
+# download stage on the host architecture.
+FROM --platform=${BUILDPLATFORM} alpine:3.22 AS openshell-cli
 ARG TARGETARCH
 ARG OPENSHELL_VERSION=v0.0.111
 RUN apk add --no-cache curl \
