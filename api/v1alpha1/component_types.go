@@ -16,28 +16,88 @@ limitations under the License.
 
 package v1alpha1
 
-import (
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// ComponentSpec describes the container image and environment for one application component.
-// Env uses the native Kubernetes EnvVar shape so values can come from Secrets and ConfigMaps.
+// ComponentSpec describes the runtime shared by every pipeline component.
 type ComponentSpec struct {
 	// Image is the complete container image reference, including its registry and tag or digest.
 	// +kubebuilder:validation:MinLength=1
 	Image string `json:"image"`
 
-	// Env is the complete environment passed to the component container.
+	// ExtraProviders attaches additional OpenShell credential providers to this component.
+	// Domain-specific providers should be configured on their corresponding integration.
 	// +optional
-	Env []corev1.EnvVar `json:"env,omitempty"`
+	ExtraProviders []string `json:"extraProviders,omitempty"`
+
+	// ExtraEnv contains non-secret environment variables that do not yet have first-class fields.
+	// +optional
+	ExtraEnv map[string]string `json:"extraEnv,omitempty"`
 }
 
-// WorkflowSpec describes environment variables passed to the platform-managed SonataFlow pod.
-type WorkflowSpec struct {
-	// Env is the complete environment passed to the workflow container.
+// PythonComponentSpec describes Python runtime settings shared by service components.
+type PythonComponentSpec struct {
+	ComponentSpec `json:",inline"`
+
+	// PythonPath is translated to PYTHONPATH.
 	// +optional
-	Env []corev1.EnvVar `json:"env,omitempty"`
+	PythonPath string `json:"pythonPath,omitempty"`
+}
+
+// ArtifactStoreSpec configures the object store shared by pipeline components.
+type ArtifactStoreSpec struct {
+	// URL is the artifact store endpoint.
+	// +optional
+	URL string `json:"url,omitempty"`
+
+	// ArtifactBucket contains non-PHI pipeline artifacts.
+	// +kubebuilder:default="cpg-artifacts"
+	// +optional
+	ArtifactBucket string `json:"artifactBucket,omitempty"`
+
+	// PHIBucket contains artifacts with protected health information.
+	// +optional
+	PHIBucket string `json:"phiBucket,omitempty"`
+
+	// CredentialsProvider is an OpenShell provider that supplies
+	// ARTIFACT_STORE_ACCESS_KEY and ARTIFACT_STORE_SECRET_KEY.
+	// +optional
+	CredentialsProvider string `json:"credentialsProvider,omitempty"`
+}
+
+// ObservabilitySpec configures tracing shared by pipeline components.
+type ObservabilitySpec struct {
+	// MLflowTrackingURI is translated to MLFLOW_TRACKING_URI.
+	// +optional
+	MLflowTrackingURI string `json:"mlflowTrackingURI,omitempty"`
+}
+
+// LLMConfigSpec configures the model endpoint shared by LLM-enabled components.
+type LLMConfigSpec struct {
+	// URL is the LiteLLM-compatible endpoint.
+	// +optional
+	URL string `json:"url,omitempty"`
+
+	// Model is the model identifier sent to the endpoint.
+	// +kubebuilder:default="default"
+	// +optional
+	Model string `json:"model,omitempty"`
+
+	// CredentialsProvider is an OpenShell provider that supplies LLM_API_KEY.
+	// +optional
+	CredentialsProvider string `json:"credentialsProvider,omitempty"`
+
+	// RequestTimeoutSeconds is the maximum duration of an LLM request.
+	// +kubebuilder:default=600
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	RequestTimeoutSeconds int32 `json:"requestTimeoutSeconds,omitempty"`
+}
+
+// PipelineReference identifies another pipeline resource in the same namespace.
+type PipelineReference struct {
+	// Name is the metadata.name of the referenced pipeline resource.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // WorkloadStatus captures status shared by the aggregate application resources.
@@ -51,4 +111,9 @@ type WorkloadStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Endpoints contains operator-published addresses for pipeline entry points.
+	// Internal component wiring is intentionally not exposed as desired state.
+	// +optional
+	Endpoints map[string]string `json:"endpoints,omitempty"`
 }

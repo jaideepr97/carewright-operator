@@ -6,6 +6,21 @@ The cpgtoacp operator manages the CPG Ingester and Care Plan Writer pipelines.
 Pipeline components are represented as OpenShell `SandboxRequest` resources so
 they run as policy-controlled sandboxes rather than ordinary Deployments.
 
+## Pipeline configuration
+
+`CPGIngester` and `CarePlanWriter` expose typed configuration for artifact
+storage, MLflow tracing, LLM access, external service endpoints, and component
+behavior. Each component still owns its image. Credential fields refer to named
+OpenShell providers rather than embedding Kubernetes secret values in
+environment variables. The operator derives internal component and SonataFlow
+addresses and publishes user-facing entry points in status.
+
+`extraEnv` and `extraProviders` are available on components for settings that do
+not yet have first-class fields. `extraEnv` is restricted to non-secret string
+values. The former component and workflow `env` arrays are no longer part of the
+v1alpha1 schema. The samples under `config/samples` show the complete first-pass
+fields.
+
 ## OpenShell sandboxes
 
 A `SandboxRequest` declares an image, command, non-secret environment values,

@@ -20,29 +20,98 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// CPGIngestionComponentSpec configures document parsing and OCR.
+type CPGIngestionComponentSpec struct {
+	ComponentSpec `json:",inline"`
+
+	// LogLevel controls application logging.
+	// +optional
+	LogLevel string `json:"logLevel,omitempty"`
+
+	// DoclingLogLevel controls Docling library logging.
+	// +optional
+	DoclingLogLevel string `json:"doclingLogLevel,omitempty"`
+
+	// PythonUnbuffered enables unbuffered Python output.
+	// +kubebuilder:default=true
+	// +optional
+	PythonUnbuffered bool `json:"pythonUnbuffered,omitempty"`
+
+	// DoclingCacheDirectory stores downloaded Docling data.
+	// +optional
+	DoclingCacheDirectory string `json:"doclingCacheDirectory,omitempty"`
+
+	// DoclingArtifactsPath contains preloaded Docling models.
+	// +optional
+	DoclingArtifactsPath string `json:"doclingArtifactsPath,omitempty"`
+
+	// HuggingFaceTransferEnabled enables the Hugging Face accelerated transfer client.
+	// +optional
+	HuggingFaceTransferEnabled bool `json:"huggingFaceTransferEnabled,omitempty"`
+
+	// HuggingFaceOffline prevents model downloads at runtime.
+	// +kubebuilder:default=true
+	// +optional
+	HuggingFaceOffline bool `json:"huggingFaceOffline,omitempty"`
+
+	// OCREnabled enables the conditional OCR pass for scanned documents.
+	// +kubebuilder:default=true
+	// +optional
+	OCREnabled bool `json:"ocrEnabled,omitempty"`
+}
+
+// CPGLLMAnalysisComponentSpec configures LLM analysis behavior.
+type CPGLLMAnalysisComponentSpec struct {
+	PythonComponentSpec `json:",inline"`
+
+	// FigureInterpretationEnabled enables vision analysis of document figures.
+	// +kubebuilder:default=true
+	// +optional
+	FigureInterpretationEnabled bool `json:"figureInterpretationEnabled,omitempty"`
+
+	// FigureInterpretationMaxFigures limits vision calls per document.
+	// +kubebuilder:default=100
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	FigureInterpretationMaxFigures int32 `json:"figureInterpretationMaxFigures,omitempty"`
+}
+
 // CPGIngesterSpec defines the desired state of CPGIngester.
 type CPGIngesterSpec struct {
+	// ArtifactStore configures shared artifact storage.
+	// +optional
+	ArtifactStore *ArtifactStoreSpec `json:"artifactStore,omitempty"`
+
+	// Observability configures shared tracing.
+	// +optional
+	Observability *ObservabilitySpec `json:"observability,omitempty"`
+
+	// LLM configures the model endpoint used by LLM analysis.
+	// +optional
+	LLM *LLMConfigSpec `json:"llm,omitempty"`
+
+	// CarePlanWriterRef selects the CarePlanWriter integrated with this pipeline.
+	// The operator resolves its generated backend address.
+	// +optional
+	CarePlanWriterRef *PipelineReference `json:"carePlanWriterRef,omitempty"`
+
 	// Ingestion parses source CPG documents and performs OCR when required.
-	Ingestion ComponentSpec `json:"ingestion"`
+	Ingestion CPGIngestionComponentSpec `json:"ingestion"`
 
 	// LLMAnalysis extracts decision logic and recommendations with an LLM.
-	LLMAnalysis ComponentSpec `json:"llmAnalysis"`
+	LLMAnalysis CPGLLMAnalysisComponentSpec `json:"llmAnalysis"`
 
 	// Assembly assembles generated artifacts into the published bundle.
-	Assembly ComponentSpec `json:"assembly"`
+	Assembly PythonComponentSpec `json:"assembly"`
 
 	// Delivery publishes assembled artifacts to the artifact store.
-	Delivery ComponentSpec `json:"delivery"`
+	Delivery PythonComponentSpec `json:"delivery"`
 
 	// BFF exposes the backend API used by the CPG Ingester UI.
-	BFF ComponentSpec `json:"bff"`
+	BFF PythonComponentSpec `json:"bff"`
 
 	// UI serves the CPG Ingester web application.
 	UI ComponentSpec `json:"ui"`
-
-	// Workflow configures the platform-managed CPG Ingester SonataFlow.
-	// +optional
-	Workflow *WorkflowSpec `json:"workflow,omitempty"`
 }
 
 // CPGIngesterStatus defines the observed state of CPGIngester.

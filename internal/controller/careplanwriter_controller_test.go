@@ -45,15 +45,16 @@ var _ = Describe("CarePlanWriter Controller", func() {
 		resource := &appsv1alpha1.CarePlanWriter{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
 			Spec: appsv1alpha1.CarePlanWriterSpec{
-				PatientData:     image(),
-				LLMReasoning:    image(),
-				DecisionEngine:  image(),
-				FHIRGeneration:  image(),
-				FHIRServer:      image(),
-				BFF:             image(),
+				AITransparency:  &appsv1alpha1.AITransparencySpec{},
+				PatientData:     appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
+				LLMReasoning:    appsv1alpha1.CarePlanLLMReasoningComponentSpec{PythonComponentSpec: appsv1alpha1.PythonComponentSpec{ComponentSpec: image()}},
+				DecisionEngine:  appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
+				FHIRGeneration:  appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
+				FHIRServer:      appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
+				BFF:             appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
 				UI:              image(),
-				MCP:             image(),
-				DecisionService: image(),
+				MCP:             appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
+				DecisionService: appsv1alpha1.DecisionServiceComponentSpec{ComponentSpec: image()},
 			},
 		}
 		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -65,6 +66,7 @@ var _ = Describe("CarePlanWriter Controller", func() {
 		updated := &appsv1alpha1.CarePlanWriter{}
 		Expect(k8sClient.Get(ctx, resourceKey, updated)).To(Succeed())
 		Expect(updated.Status.ObservedGeneration).To(Equal(updated.Generation))
+		Expect(updated.Spec.AITransparency.CapturePrompts).To(BeTrue())
 		Expect(updated.Status.Conditions).To(ContainElement(And(
 			HaveField("Type", "Accepted"),
 			HaveField("Status", metav1.ConditionTrue),

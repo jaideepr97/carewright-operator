@@ -20,38 +20,140 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// EmbeddingSpec configures vector embedding generation for guideline retrieval.
+type EmbeddingSpec struct {
+	// Provider selects the embedding implementation, for example openai or local.
+	// +optional
+	Provider string `json:"provider,omitempty"`
+
+	// Model is the embedding model identifier.
+	// +optional
+	Model string `json:"model,omitempty"`
+
+	// URL overrides the embedding API endpoint. The LLM URL is used when omitted.
+	// +optional
+	URL string `json:"url,omitempty"`
+
+	// CredentialsProvider is an OpenShell provider that supplies EMBEDDING_API_KEY.
+	// The LLM credentials provider is used when omitted.
+	// +optional
+	CredentialsProvider string `json:"credentialsProvider,omitempty"`
+}
+
+// AITransparencySpec configures the provenance recorded with generated care plans.
+type AITransparencySpec struct {
+	// CapturePrompts emits rendered prompts as FHIR DocumentReferences.
+	// Prompts can contain PHI and should be disabled where retention is inappropriate.
+	// +kubebuilder:default=true
+	// +optional
+	CapturePrompts bool `json:"capturePrompts,omitempty"`
+
+	// ModelCardURL is recorded as the model-card DocumentReference.
+	// +optional
+	ModelCardURL string `json:"modelCardURL,omitempty"`
+
+	// Reviewer configures the default human verifier.
+	// +optional
+	Reviewer *ReviewerSpec `json:"reviewer,omitempty"`
+}
+
+// ReviewerSpec identifies the default human verifier of a care plan.
+type ReviewerSpec struct {
+	// Display is the human-readable reviewer name.
+	// +optional
+	Display string `json:"display,omitempty"`
+
+	// Reference is the reviewer FHIR reference, for example Practitioner/123.
+	// +optional
+	Reference string `json:"reference,omitempty"`
+
+	// IdentifierSystem is the URI of the reviewer's identifier system.
+	// +optional
+	IdentifierSystem string `json:"identifierSystem,omitempty"`
+
+	// IdentifierValue is the reviewer identifier in IdentifierSystem.
+	// +optional
+	IdentifierValue string `json:"identifierValue,omitempty"`
+}
+
+// FHIRTargetSpec configures the target EHR written by the FHIR server component.
+type FHIRTargetSpec struct {
+	// URL is the base FHIR R4 endpoint.
+	// +optional
+	URL string `json:"url,omitempty"`
+
+	// CredentialsProvider is an optional OpenShell provider that supplies
+	// FHIR_CLIENT_ID and FHIR_CLIENT_SECRET.
+	// +optional
+	CredentialsProvider string `json:"credentialsProvider,omitempty"`
+}
+
+// CarePlanLLMReasoningComponentSpec configures guideline reasoning.
+type CarePlanLLMReasoningComponentSpec struct {
+	PythonComponentSpec `json:",inline"`
+
+	// Embedding configures guideline vector embeddings.
+	// +optional
+	Embedding *EmbeddingSpec `json:"embedding,omitempty"`
+}
+
+// DecisionServiceComponentSpec configures the Kogito decision service runtime.
+type DecisionServiceComponentSpec struct {
+	ComponentSpec `json:",inline"`
+
+	// JavaOptions contains additional JVM options.
+	// +optional
+	JavaOptions string `json:"javaOptions,omitempty"`
+}
+
 // CarePlanWriterSpec defines the desired state of CarePlanWriter.
 type CarePlanWriterSpec struct {
+	// ArtifactStore configures shared artifact and PHI storage.
+	// +optional
+	ArtifactStore *ArtifactStoreSpec `json:"artifactStore,omitempty"`
+
+	// Observability configures shared tracing.
+	// +optional
+	Observability *ObservabilitySpec `json:"observability,omitempty"`
+
+	// LLM configures the model endpoint used by reasoning and FHIR generation.
+	// +optional
+	LLM *LLMConfigSpec `json:"llm,omitempty"`
+
+	// FHIRTarget configures the target EHR.
+	// +optional
+	FHIRTarget *FHIRTargetSpec `json:"fhirTarget,omitempty"`
+
+	// AITransparency configures prompt provenance, the model card, and the default reviewer.
+	// +optional
+	AITransparency *AITransparencySpec `json:"aiTransparency,omitempty"`
+
 	// PatientData scans and normalizes patient data for the workflow.
-	PatientData ComponentSpec `json:"patientData"`
+	PatientData PythonComponentSpec `json:"patientData"`
 
 	// LLMReasoning resolves guidelines, evaluates decisions, and composes plans.
-	LLMReasoning ComponentSpec `json:"llmReasoning"`
+	LLMReasoning CarePlanLLMReasoningComponentSpec `json:"llmReasoning"`
 
 	// DecisionEngine provides the Python-facing wrapper around the Kogito runtime.
-	DecisionEngine ComponentSpec `json:"decisionEngine"`
+	DecisionEngine PythonComponentSpec `json:"decisionEngine"`
 
 	// FHIRGeneration generates and reviews FHIR bundles.
-	FHIRGeneration ComponentSpec `json:"fhirGeneration"`
+	FHIRGeneration PythonComponentSpec `json:"fhirGeneration"`
 
 	// FHIRServer writes approved care plans to the configured FHIR server.
-	FHIRServer ComponentSpec `json:"fhirServer"`
+	FHIRServer PythonComponentSpec `json:"fhirServer"`
 
 	// BFF exposes the backend API used by the Care Plan Writer UI.
-	BFF ComponentSpec `json:"bff"`
+	BFF PythonComponentSpec `json:"bff"`
 
 	// UI serves the Care Plan Writer web application.
 	UI ComponentSpec `json:"ui"`
 
 	// MCP exposes the Care Plan Writer tools through the Model Context Protocol.
-	MCP ComponentSpec `json:"mcp"`
+	MCP PythonComponentSpec `json:"mcp"`
 
 	// DecisionService runs the Kogito decision service used to evaluate DMN.
-	DecisionService ComponentSpec `json:"decisionService"`
-
-	// Workflow configures the platform-managed Care Plan Writer SonataFlow.
-	// +optional
-	Workflow *WorkflowSpec `json:"workflow,omitempty"`
+	DecisionService DecisionServiceComponentSpec `json:"decisionService"`
 }
 
 // CarePlanWriterStatus defines the observed state of CarePlanWriter.

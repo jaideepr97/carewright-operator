@@ -6,233 +6,56 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: careplanwriter-sample
 spec:
+  artifactStore:
+    url: http://minio:9000
+    artifactBucket: cpg-artifacts
+    phiBucket: cpg-phi
+    credentialsProvider: minio-credentials
+  observability:
+    mlflowTrackingURI: http://mlflow:5000
+  llm:
+    url: http://litellm:4000
+    model: default
+    credentialsProvider: llm-credentials
+    requestTimeoutSeconds: 600
+  fhirTarget:
+    url: http://cpg-mock-ehr-medplum-server:8103/fhir/R4
+    credentialsProvider: fhir-client-credentials
+  aiTransparency:
+    capturePrompts: true
+    modelCardURL: ""
+    reviewer:
+      display: Demo Clinician
+      reference: Practitioner/demo-clinician
+      identifierSystem: ""
+      identifierValue: ""
   patientData:
     image: quay.io/cpgtoacp/acp-writer-patient-data:latest
-    env:
-      - name: MLFLOW_TRACKING_URI
-        value: http://mlflow:5000
-      - name: ARTIFACT_STORE_URL
-        value: http://minio:9000
-      - name: PHI_STORE_BUCKET
-        value: cpg-phi
-      - name: ARTIFACT_STORE_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_ACCESS_KEY
-      - name: ARTIFACT_STORE_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_SECRET_KEY
-      - name: PYTHONPATH
-        value: /app/src
+    pythonPath: /app/src
   llmReasoning:
     image: quay.io/cpgtoacp/acp-writer-llm:latest
-    env:
-      - name: MLFLOW_TRACKING_URI
-        value: http://mlflow:5000
-      - name: ARTIFACT_STORE_URL
-        value: http://minio:9000
-      - name: ARTIFACT_STORE_BUCKET
-        value: cpg-artifacts
-      - name: PHI_STORE_BUCKET
-        value: cpg-phi
-      - name: ARTIFACT_STORE_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_ACCESS_KEY
-      - name: ARTIFACT_STORE_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_SECRET_KEY
-      - name: PYTHONPATH
-        value: /app/src
-      - name: LITELLM_URL
-        value: http://litellm:4000
-      - name: LLM_MODEL
-        value: default
-      - name: LLM_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: llm-credentials
-            key: LLM_API_KEY
-      - name: LLM_REQUEST_TIMEOUT
-        value: "600"
-      - name: DECISION_ENGINE_URL
-        value: http://acp-decision-engine:8080
-      - name: EMBEDDING_PROVIDER
-        value: openai
-      - name: EMBEDDING_MODEL
-        value: text-embedding-3-small
-      - name: EMBEDDING_BASE_URL
-        value: http://litellm:4000
-      - name: EMBEDDING_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: llm-credentials
-            key: LLM_API_KEY
+    pythonPath: /app/src
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      url: http://litellm:4000
   decisionEngine:
     image: quay.io/cpgtoacp/acp-writer-decision:latest
-    env:
-      - name: MLFLOW_TRACKING_URI
-        value: http://mlflow:5000
-      - name: ARTIFACT_STORE_URL
-        value: http://minio:9000
-      - name: PHI_STORE_BUCKET
-        value: cpg-phi
-      - name: ARTIFACT_STORE_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_ACCESS_KEY
-      - name: ARTIFACT_STORE_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_SECRET_KEY
-      - name: PYTHONPATH
-        value: /app/src
-      - name: KOGITO_URL
-        value: http://cpg-decision-svc-decision-service:8081
+    pythonPath: /app/src
   fhirGeneration:
     image: quay.io/cpgtoacp/acp-writer-fhir-gen:latest
-    env:
-      - name: MLFLOW_TRACKING_URI
-        value: http://mlflow:5000
-      - name: ARTIFACT_STORE_URL
-        value: http://minio:9000
-      - name: PHI_STORE_BUCKET
-        value: cpg-phi
-      - name: ARTIFACT_STORE_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_ACCESS_KEY
-      - name: ARTIFACT_STORE_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_SECRET_KEY
-      - name: PYTHONPATH
-        value: /app/src
-      - name: LITELLM_URL
-        value: http://litellm:4000
-      - name: LLM_MODEL
-        value: default
-      - name: LLM_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: llm-credentials
-            key: LLM_API_KEY
-      - name: LLM_REQUEST_TIMEOUT
-        value: "600"
-      - name: ACP_CAPTURE_PROMPTS
-        value: "true"
-      - name: LLM_MODEL_CARD_URL
-        value: ""
+    pythonPath: /app/src
   fhirServer:
     image: quay.io/cpgtoacp/acp-writer-fhir-srv:latest
-    env:
-      - name: MLFLOW_TRACKING_URI
-        value: http://mlflow:5000
-      - name: ARTIFACT_STORE_URL
-        value: http://minio:9000
-      - name: PHI_STORE_BUCKET
-        value: cpg-phi
-      - name: ARTIFACT_STORE_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_ACCESS_KEY
-      - name: ARTIFACT_STORE_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_SECRET_KEY
-      - name: PYTHONPATH
-        value: /app/src
-      - name: FHIR_SERVER_URL
-        value: http://cpg-mock-ehr-medplum-server:8103/fhir/R4
-      - name: FHIR_CLIENT_ID
-        valueFrom:
-          secretKeyRef:
-            name: fhir-client-credentials
-            key: FHIR_CLIENT_ID
-            optional: true
-      - name: FHIR_CLIENT_SECRET
-        valueFrom:
-          secretKeyRef:
-            name: fhir-client-credentials
-            key: FHIR_CLIENT_SECRET
-            optional: true
-      - name: ACP_REVIEWER_DISPLAY
-        value: Demo Clinician
-      - name: ACP_REVIEWER_REFERENCE
-        value: Practitioner/demo-clinician
-      - name: ACP_REVIEWER_ID_SYSTEM
-        value: ""
-      - name: ACP_REVIEWER_ID_VALUE
-        value: ""
+    pythonPath: /app/src
   bff:
     image: quay.io/cpgtoacp/acp-writer-bff:latest
-    env:
-      - name: MLFLOW_TRACKING_URI
-        value: http://mlflow:5000
-      - name: SONATAFLOW_URL
-        value: http://acpwriter:80
-      - name: MINIO_ENDPOINT
-        value: http://minio:9000
-      - name: LLM_REASONING_URL
-        value: http://acp-llm-reasoning:8080
-      - name: DECISION_ENGINE_URL
-        value: http://acp-decision-engine:8080
-      - name: FHIR_SERVER_URL
-        value: http://acp-fhir-server:8080
-      - name: ARTIFACT_STORE_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_ACCESS_KEY
-      - name: ARTIFACT_STORE_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: minio-credentials
-            key: ARTIFACT_STORE_SECRET_KEY
-      - name: PYTHONPATH
-        value: /app/src
+    pythonPath: /app/src
   ui:
     image: quay.io/cpgtoacp/acp-writer-ui:latest
-    env:
-      - name: BFF_HOST
-        value: acp-bff:8080
   mcp:
     image: quay.io/cpgtoacp/acp-writer-mcp:latest
-    env:
-      - name: KOGITO_URL
-        value: http://cpg-decision-svc-decision-service:80
-      - name: FHIR_SERVER_URL
-        value: http://acp-fhir-server:8080
-      - name: MLFLOW_TRACKING_URI
-        value: http://mlflow:5000
-      - name: PYTHONPATH
-        value: /app/src
+    pythonPath: /app/src
   decisionService:
     image: quay.io/cpgtoacp/decision-service:latest
-    env:
-      - name: JAVA_OPTS_APPEND
-        value: -Dquarkus.http.host=0.0.0.0
-  workflow:
-    env:
-      - name: PATIENT_DATA_URL
-        value: http://acp-patient-data:8080
-      - name: LLM_REASONING_URL
-        value: http://acp-llm-reasoning:8080
-      - name: DECISION_ENGINE_URL
-        value: http://acp-decision-engine:8080
-      - name: FHIR_GENERATION_URL
-        value: http://acp-fhir-generation:8080
-      - name: FHIR_SERVER_URL
-        value: http://acp-fhir-server:8080
+    javaOptions: -Dquarkus.http.host=0.0.0.0

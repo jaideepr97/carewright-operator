@@ -45,11 +45,12 @@ var _ = Describe("CPGIngester Controller", func() {
 		resource := &appsv1alpha1.CPGIngester{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
 			Spec: appsv1alpha1.CPGIngesterSpec{
-				Ingestion:   image(),
-				LLMAnalysis: image(),
-				Assembly:    image(),
-				Delivery:    image(),
-				BFF:         image(),
+				LLM:         &appsv1alpha1.LLMConfigSpec{},
+				Ingestion:   appsv1alpha1.CPGIngestionComponentSpec{ComponentSpec: image()},
+				LLMAnalysis: appsv1alpha1.CPGLLMAnalysisComponentSpec{PythonComponentSpec: appsv1alpha1.PythonComponentSpec{ComponentSpec: image()}},
+				Assembly:    appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
+				Delivery:    appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
+				BFF:         appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
 				UI:          image(),
 			},
 		}
@@ -62,6 +63,10 @@ var _ = Describe("CPGIngester Controller", func() {
 		updated := &appsv1alpha1.CPGIngester{}
 		Expect(k8sClient.Get(ctx, resourceKey, updated)).To(Succeed())
 		Expect(updated.Status.ObservedGeneration).To(Equal(updated.Generation))
+		Expect(updated.Spec.LLM.Model).To(Equal("default"))
+		Expect(updated.Spec.LLM.RequestTimeoutSeconds).To(Equal(int32(600)))
+		Expect(updated.Spec.Ingestion.OCREnabled).To(BeTrue())
+		Expect(updated.Spec.LLMAnalysis.FigureInterpretationMaxFigures).To(Equal(int32(100)))
 		Expect(updated.Status.Conditions).To(ContainElement(And(
 			HaveField("Type", "Accepted"),
 			HaveField("Status", metav1.ConditionTrue),
