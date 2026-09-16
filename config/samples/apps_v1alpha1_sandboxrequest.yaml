@@ -20,7 +20,8 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: sandboxrequest-sample
 spec:
-  image: docker.io/library/busybox:1.37
+  sandboxName: sandbox-test
+  image: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
   command: [sh, -c, "while true; do sleep 3600; done"]
   policyRef:
     name: sandboxrequest-sample-policy

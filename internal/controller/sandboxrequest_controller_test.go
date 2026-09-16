@@ -131,6 +131,14 @@ var _ = Describe("SandboxRequest Controller", func() {
 			"--memory", "512Mi",
 		))
 		Expect(strings.Join(createArgs, " ")).To(ContainSubstring("-- python -m component"))
+		Expect(createArgs).NotTo(ContainElement("--output"))
+		specHashLabel := ""
+		for index, arg := range createArgs {
+			if arg == "--label" && index+1 < len(createArgs) && strings.HasPrefix(createArgs[index+1], "cpgtoacp.io/spec-hash=") {
+				specHashLabel = strings.TrimPrefix(createArgs[index+1], "cpgtoacp.io/spec-hash=")
+			}
+		}
+		Expect(specHashLabel).To(HaveLen(63))
 
 		Expect(k8sClient.Get(ctx, key, request)).To(Succeed())
 		Expect(request.Status.SandboxName).To(Equal(resourceName))

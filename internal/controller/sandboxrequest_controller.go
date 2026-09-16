@@ -262,7 +262,10 @@ func requestHash(spec appsv1alpha1.SandboxRequestSpec, policy []byte) (string, e
 		return "", fmt.Errorf("encode desired sandbox state: %w", err)
 	}
 	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:]), nil
+	// OpenShell stores this value as a Kubernetes label, whose value is limited
+	// to 63 characters. Dropping one hex nibble retains ample collision
+	// resistance while keeping the hash valid as both a label and status value.
+	return hex.EncodeToString(sum[:])[:63], nil
 }
 
 func effectiveSandboxName(request *appsv1alpha1.SandboxRequest) string {
@@ -315,7 +318,12 @@ func (r *SandboxRequestReconciler) createSandbox(
 	specHash string,
 	policy []byte,
 ) (sandboxObservation, error) {
-	args := []string{"sandbox", "create", "--name", name, "--from", request.Spec.Image, "--detach", "--no-tty", "--no-auto-providers", "--output", "json"}
+	args := []string{"sandbox", "create", "--name", name, "--from", request.Spec.Image, "--detach", "--no-tty", "--no-auto-providers"}
+	// OpenShell 0.0.111 does not allow --output together with a custom command.
+	// Without a command, request JSON so the initial observation can be recorded.
+	if len(request.Spec.Command) == 0 {
+		args = append(args, "--output", "json")
+	}
 	args = append(args, gatewayArgs(request)...)
 
 	if len(policy) > 0 {
@@ -376,6 +384,11 @@ func (r *SandboxRequestReconciler) createSandbox(
 		return sandboxObservation{}, err
 	}
 	observation, err := decodeSandbox(output)
+	if err != nil && len(request.Spec.Command) > 0 {
+		// Command-bearing creates produce human-readable output. The normal poll
+		// will retrieve structured state after the gateway accepts the request.
+		return sandboxObservation{Phase: "Creating"}, nil
+	}
 	if err != nil {
 		return sandboxObservation{}, err
 	}
