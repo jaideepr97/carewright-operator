@@ -95,7 +95,6 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
-	var openShellCLIPath string
 	var controllers string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -115,8 +114,6 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	flag.StringVar(&openShellCLIPath, "openshell-cli-path", "openshell",
-		"Path to the OpenShell CLI executable used by the SandboxRequest controller.")
 	flag.StringVar(&controllers, "controllers", "all",
 		"Comma-separated controllers to run: cpgingester, careplanwriter, sandboxrequest, or all.")
 	opts := zap.Options{
@@ -267,7 +264,6 @@ func main() {
 		if err := (&controller.SandboxRequestReconciler{
 			Client: mgr.GetClient(),
 			Scheme: mgr.GetScheme(),
-			Runner: controller.ExecOpenShellRunner{Path: openShellCLIPath},
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "SandboxRequest")
 			os.Exit(1)

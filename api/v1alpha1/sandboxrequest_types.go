@@ -22,9 +22,9 @@ import (
 )
 
 // SandboxGatewaySpec selects the OpenShell gateway used for a request.
-// Name selects a locally registered gateway, while endpoint connects directly.
 type SandboxGatewaySpec struct {
-	// Name is the name of a gateway registered with the OpenShell CLI.
+	// Name is retained for compatibility with CLI-based controllers. SDK-based
+	// controllers require Endpoint instead.
 	// +optional
 	Name string `json:"name,omitempty"`
 
@@ -32,7 +32,7 @@ type SandboxGatewaySpec struct {
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// Insecure permits an unencrypted direct gateway connection.
+	// Insecure permits plaintext HTTP or skips certificate verification for HTTPS.
 	// +optional
 	Insecure bool `json:"insecure,omitempty"`
 }
@@ -64,7 +64,7 @@ type SandboxRequestSpec struct {
 	// +optional
 	SandboxName string `json:"sandboxName,omitempty"`
 
-	// Gateway selects the OpenShell gateway. The CLI's active gateway is used when omitted.
+	// Gateway selects the OpenShell gateway. The controller's configured endpoint is used when omitted.
 	// +optional
 	Gateway SandboxGatewaySpec `json:"gateway,omitempty"`
 

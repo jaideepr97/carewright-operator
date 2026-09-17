@@ -75,18 +75,20 @@ spec:
                   to the sandbox.
                 type: object
               gateway:
-                description: Gateway selects the OpenShell gateway. The CLI's active
-                  gateway is used when omitted.
+                description: Gateway selects the OpenShell gateway. The controller's
+                  configured endpoint is used when omitted.
                 properties:
                   endpoint:
                     description: Endpoint is the URL of an OpenShell gateway.
                     type: string
                   insecure:
-                    description: Insecure permits an unencrypted direct gateway connection.
+                    description: Insecure permits plaintext HTTP or skips certificate
+                      verification for HTTPS.
                     type: boolean
                   name:
-                    description: Name is the name of a gateway registered with the
-                      OpenShell CLI.
+                    description: |-
+                      Name is retained for compatibility with CLI-based controllers. SDK-based
+                      controllers require Endpoint instead.
                     type: string
                 type: object
               image:
@@ -232,11 +234,13 @@ spec:
                     description: Endpoint is the URL of an OpenShell gateway.
                     type: string
                   insecure:
-                    description: Insecure permits an unencrypted direct gateway connection.
+                    description: Insecure permits plaintext HTTP or skips certificate
+                      verification for HTTPS.
                     type: boolean
                   name:
-                    description: Name is the name of a gateway registered with the
-                      OpenShell CLI.
+                    description: |-
+                      Name is retained for compatibility with CLI-based controllers. SDK-based
+                      controllers require Endpoint instead.
                     type: string
                 type: object
               observedGeneration:

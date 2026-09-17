@@ -24,12 +24,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	openshellv1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1"
+	openshelltypes "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
+	sandboxv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
+	"google.golang.org/protobuf/encoding/protojson"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
@@ -41,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/yaml"
 
 	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
 )
@@ -49,57 +53,59 @@ const (
 	sandboxFinalizer = "apps.cpgtoacp.io/sandbox-cleanup"
 	readyCondition   = "Ready"
 
-	defaultWorkspace = "default"
-	pollInterval     = 10 * time.Second
+	defaultWorkspace     = "default"
+	defaultMainShell     = "/bin/bash"
+	proposalApprovalMode = "proposal_approval_mode"
+	pollInterval         = 10 * time.Second
 )
 
-// OpenShellRunner runs an OpenShell CLI invocation. The interface keeps gateway
-// calls deterministic and independently testable from Kubernetes reconciliation.
-type OpenShellRunner interface {
-	Run(ctx context.Context, args ...string) ([]byte, error)
+// OpenShellClientSession owns an SDK client for one gateway connection.
+type OpenShellClientSession struct {
+	Client openshellv1.ClientInterface
+	Close  func() error
 }
 
-// ExecOpenShellRunner invokes a local OpenShell CLI binary without a shell.
-type ExecOpenShellRunner struct {
-	Path string
+// OpenShellClientFactory creates SDK clients for the gateway selected by a request.
+type OpenShellClientFactory interface {
+	NewClient(gateway appsv1alpha1.SandboxGatewaySpec) (*OpenShellClientSession, error)
 }
 
-// OpenShellCommandError retains CLI output so errors such as "not found" can be
-// handled idempotently without matching the executable's exit status.
-type OpenShellCommandError struct {
-	Args   []string
-	Output string
-	Err    error
-}
+// SDKOpenShellClientFactory creates official OpenShell Go SDK clients.
+type SDKOpenShellClientFactory struct{}
 
-func (e *OpenShellCommandError) Error() string {
-	operation := "command"
-	if len(e.Args) >= 2 {
-		operation = strings.Join(e.Args[:2], " ")
-	}
-	return fmt.Sprintf("openshell %s failed: %v: %s", operation, e.Err, strings.TrimSpace(e.Output))
-}
-
-func (e *OpenShellCommandError) Unwrap() error { return e.Err }
-
-func (r ExecOpenShellRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
-	path := r.Path
-	if path == "" {
-		path = "openshell"
+func (SDKOpenShellClientFactory) NewClient(gateway appsv1alpha1.SandboxGatewaySpec) (*OpenShellClientSession, error) {
+	if gateway.Name != "" {
+		return nil, fmt.Errorf("gateway.name %q requires CLI registration and is not supported by the SDK; set gateway.endpoint", gateway.Name)
 	}
 
-	output, err := exec.CommandContext(ctx, path, args...).CombinedOutput() // #nosec G204 -- arguments are passed directly, never through a shell.
+	endpoint := gateway.Endpoint
+	insecure := gateway.Insecure
+	if endpoint == "" {
+		endpoint = os.Getenv("OPENSHELL_GATEWAY_ENDPOINT")
+		if !insecure {
+			insecure, _ = strconv.ParseBool(os.Getenv("OPENSHELL_GATEWAY_INSECURE"))
+		}
+	}
+	if endpoint == "" {
+		return nil, errors.New("OpenShell gateway endpoint is required in spec.gateway.endpoint or OPENSHELL_GATEWAY_ENDPOINT")
+	}
+
+	config := openshellv1.Config{Address: endpoint, Auth: openshellv1.NoAuth()}
+	if insecure && !strings.HasPrefix(endpoint, "http://") {
+		config.TLS = &openshelltypes.TLSConfig{Insecure: true}
+	}
+	sdkClient, err := openshellv1.NewClient(config)
 	if err != nil {
-		return output, &OpenShellCommandError{Args: args, Output: string(output), Err: err}
+		return nil, fmt.Errorf("create OpenShell SDK client: %w", err)
 	}
-	return output, nil
+	return &OpenShellClientSession{Client: sdkClient, Close: sdkClient.Close}, nil
 }
 
 // SandboxRequestReconciler reconciles a SandboxRequest object.
 type SandboxRequestReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Runner OpenShellRunner
+	Scheme        *runtime.Scheme
+	ClientFactory OpenShellClientFactory
 }
 
 // +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
@@ -170,7 +176,7 @@ func (r *SandboxRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				return r.fail(ctx, &request, "CreateFailed", err)
 			}
 		}
-	} else if isNotFound(err) {
+	} else if openshellv1.IsNotFound(err) {
 		observed, err = r.createSandbox(ctx, &request, sandboxName, desiredHash, policy)
 		if err != nil {
 			return r.fail(ctx, &request, "CreateFailed", err)
@@ -204,7 +210,7 @@ func (r *SandboxRequestReconciler) reconcileDelete(ctx context.Context, request 
 	owned := request.Status.SpecHash != ""
 	if !owned {
 		observation, err := r.getSandbox(ctx, location, sandboxName)
-		if err != nil && !isNotFound(err) {
+		if err != nil && !openshellv1.IsNotFound(err) {
 			return r.fail(ctx, request, "DeleteLookupFailed", err)
 		}
 		owned = err == nil && observation.Labels["cpgtoacp.io/request-uid"] == string(request.UID)
@@ -220,11 +226,18 @@ func (r *SandboxRequestReconciler) reconcileDelete(ctx context.Context, request 
 	return ctrl.Result{}, r.Patch(ctx, request, client.MergeFrom(before))
 }
 
-func (r *SandboxRequestReconciler) runner() OpenShellRunner {
-	if r.Runner != nil {
-		return r.Runner
+func (r *SandboxRequestReconciler) clientSession(gateway appsv1alpha1.SandboxGatewaySpec) (*OpenShellClientSession, error) {
+	factory := r.ClientFactory
+	if factory == nil {
+		factory = SDKOpenShellClientFactory{}
 	}
-	return ExecOpenShellRunner{}
+	return factory.NewClient(gateway)
+}
+
+func closeSession(session *OpenShellClientSession) {
+	if session != nil && session.Close != nil {
+		_ = session.Close()
+	}
 }
 
 func (r *SandboxRequestReconciler) policy(ctx context.Context, request *appsv1alpha1.SandboxRequest) ([]byte, error) {
@@ -262,9 +275,7 @@ func requestHash(spec appsv1alpha1.SandboxRequestSpec, policy []byte) (string, e
 		return "", fmt.Errorf("encode desired sandbox state: %w", err)
 	}
 	sum := sha256.Sum256(payload)
-	// OpenShell stores this value as a Kubernetes label, whose value is limited
-	// to 63 characters. Dropping one hex nibble retains ample collision
-	// resistance while keeping the hash valid as both a label and status value.
+	// OpenShell labels share Kubernetes' 63-character label-value limit.
 	return hex.EncodeToString(sum[:])[:63], nil
 }
 
@@ -288,27 +299,18 @@ func workspace(request *appsv1alpha1.SandboxRequest) string {
 	return defaultWorkspace
 }
 
-func gatewayArgs(request *appsv1alpha1.SandboxRequest) []string {
-	args := []string{"--workspace", workspace(request)}
-	if request.Spec.Gateway.Name != "" {
-		args = append(args, "--gateway", request.Spec.Gateway.Name)
-	} else if request.Spec.Gateway.Endpoint != "" {
-		args = append(args, "--gateway-endpoint", request.Spec.Gateway.Endpoint)
-	}
-	if request.Spec.Gateway.Insecure {
-		args = append(args, "--gateway-insecure")
-	}
-	return args
-}
-
 func (r *SandboxRequestReconciler) getSandbox(ctx context.Context, request *appsv1alpha1.SandboxRequest, name string) (sandboxObservation, error) {
-	args := []string{"sandbox", "get", name, "--output", "json"}
-	args = append(args, gatewayArgs(request)...)
-	output, err := r.runner().Run(ctx, args...)
+	session, err := r.clientSession(request.Spec.Gateway)
 	if err != nil {
 		return sandboxObservation{}, err
 	}
-	return decodeSandbox(output)
+	defer closeSession(session)
+
+	sandbox, err := session.Client.Sandboxes().Get(ctx, workspace(request), name)
+	if err != nil {
+		return sandboxObservation{}, err
+	}
+	return observeSandbox(sandbox), nil
 }
 
 func (r *SandboxRequestReconciler) createSandbox(
@@ -316,38 +318,11 @@ func (r *SandboxRequestReconciler) createSandbox(
 	request *appsv1alpha1.SandboxRequest,
 	name string,
 	specHash string,
-	policy []byte,
+	policyData []byte,
 ) (sandboxObservation, error) {
-	args := []string{"sandbox", "create", "--name", name, "--from", request.Spec.Image, "--detach", "--no-tty", "--no-auto-providers"}
-	// OpenShell 0.0.111 does not allow --output together with a custom command.
-	// Without a command, request JSON so the initial observation can be recorded.
-	if len(request.Spec.Command) == 0 {
-		args = append(args, "--output", "json")
-	}
-	args = append(args, gatewayArgs(request)...)
-
-	if len(policy) > 0 {
-		file, err := os.CreateTemp("", "cpgtoacp-openshell-policy-*.yaml")
-		if err != nil {
-			return sandboxObservation{}, fmt.Errorf("create temporary OpenShell policy: %w", err)
-		}
-		policyPath := file.Name()
-		defer func() { _ = os.Remove(policyPath) }()
-		if _, err := file.Write(policy); err != nil {
-			_ = file.Close()
-			return sandboxObservation{}, fmt.Errorf("write temporary OpenShell policy: %w", err)
-		}
-		if err := file.Close(); err != nil {
-			return sandboxObservation{}, fmt.Errorf("close temporary OpenShell policy: %w", err)
-		}
-		args = append(args, "--policy", policyPath)
-	}
-
-	for _, provider := range request.Spec.Providers {
-		args = append(args, "--provider", provider)
-	}
-	for _, item := range sortedPairs(request.Spec.Env) {
-		args = append(args, "--env", item)
+	policy, err := decodeSandboxPolicy(policyData)
+	if err != nil {
+		return sandboxObservation{}, err
 	}
 
 	labels := make(map[string]string, len(request.Spec.Labels)+4)
@@ -358,54 +333,125 @@ func (r *SandboxRequestReconciler) createSandbox(
 	labels["cpgtoacp.io/request-namespace"] = request.Namespace
 	labels["cpgtoacp.io/request-uid"] = string(request.UID)
 	labels["cpgtoacp.io/spec-hash"] = specHash
-	for _, item := range sortedPairs(labels) {
-		args = append(args, "--label", item)
-	}
 
-	if request.Spec.Resources.CPU != "" {
-		args = append(args, "--cpu", request.Spec.Resources.CPU)
+	command := slices.Clone(request.Spec.Command)
+	if len(command) == 0 {
+		command = []string{defaultMainShell, "-l"}
 	}
-	if request.Spec.Resources.Memory != "" {
-		args = append(args, "--memory", request.Spec.Resources.Memory)
+	template := &openshellv1.SandboxTemplate{
+		Image:     request.Spec.Image,
+		Resources: resourceLimits(request.Spec.Resources),
+	}
+	spec := &openshellv1.SandboxSpec{
+		Environment: cloneMap(request.Spec.Env),
+		Template:    template,
+		Providers:   slices.Clone(request.Spec.Providers),
+		Policy:      policy,
+		Command:     command,
+		TTY:         false,
 	}
 	if request.Spec.Resources.GPU != nil {
-		args = append(args, "--gpu", strconv.FormatInt(int64(*request.Spec.Resources.GPU), 10))
-	}
-	if request.Spec.ApprovalMode != "" {
-		args = append(args, "--approval-mode", request.Spec.ApprovalMode)
-	}
-	if len(request.Spec.Command) > 0 {
-		args = append(args, "--")
-		args = append(args, request.Spec.Command...)
+		count := uint32(*request.Spec.Resources.GPU) // #nosec G115 -- CRD validation requires a non-negative value.
+		spec.GPUCount = &count
 	}
 
-	output, err := r.runner().Run(ctx, args...)
+	session, err := r.clientSession(request.Spec.Gateway)
 	if err != nil {
 		return sandboxObservation{}, err
 	}
-	observation, err := decodeSandbox(output)
-	if err != nil && len(request.Spec.Command) > 0 {
-		// Command-bearing creates produce human-readable output. The normal poll
-		// will retrieve structured state after the gateway accepts the request.
-		return sandboxObservation{Phase: "Creating"}, nil
-	}
+	defer closeSession(session)
+
+	sandbox, err := session.Client.Sandboxes().Create(ctx, workspace(request), name, spec, labels)
 	if err != nil {
 		return sandboxObservation{}, err
 	}
-	if observation.Phase == "" {
-		observation.Phase = "Creating"
+	if request.Spec.ApprovalMode == "auto" {
+		_, err = session.Client.Config().Update(ctx, workspace(request), &openshellv1.ConfigUpdate{
+			Name:       name,
+			SettingKey: proposalApprovalMode,
+			SettingValue: &openshellv1.SettingValue{
+				Type:      openshellv1.SettingValueString,
+				StringVal: request.Spec.ApprovalMode,
+			},
+		})
+		if err != nil {
+			deleteErr := session.Client.Sandboxes().Delete(ctx, workspace(request), name)
+			return sandboxObservation{}, errors.Join(fmt.Errorf("set sandbox approval mode: %w", err), deleteErr)
+		}
 	}
-	return observation, nil
+	return observeSandbox(sandbox), nil
 }
 
 func (r *SandboxRequestReconciler) deleteSandbox(ctx context.Context, request *appsv1alpha1.SandboxRequest, name string) error {
-	args := []string{"sandbox", "delete", name}
-	args = append(args, gatewayArgs(request)...)
-	_, err := r.runner().Run(ctx, args...)
-	if err != nil && !isNotFound(err) {
+	session, err := r.clientSession(request.Spec.Gateway)
+	if err != nil {
 		return err
 	}
-	return nil
+	defer closeSession(session)
+
+	err = session.Client.Sandboxes().Delete(ctx, workspace(request), name)
+	if openshellv1.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func resourceLimits(resources appsv1alpha1.SandboxResources) map[string]any {
+	limits := map[string]any{}
+	if resources.CPU != "" {
+		limits["cpu"] = resources.CPU
+	}
+	if resources.Memory != "" {
+		limits["memory"] = resources.Memory
+	}
+	if len(limits) == 0 {
+		return nil
+	}
+	return map[string]any{"limits": limits}
+}
+
+func decodeSandboxPolicy(data []byte) (*openshellv1.SandboxPolicy, error) {
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return nil, nil
+	}
+	jsonData, err := yaml.YAMLToJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode OpenShell policy YAML: %w", err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(jsonData, &document); err != nil {
+		return nil, fmt.Errorf("decode OpenShell policy document: %w", err)
+	}
+	for oldName, protoName := range map[string]string{
+		"filesystem_policy": "filesystem",
+		"landlock_policy":   "landlock",
+		"process_policy":    "process",
+	} {
+		if value, ok := document[oldName]; ok {
+			if _, duplicate := document[protoName]; duplicate {
+				return nil, fmt.Errorf("OpenShell policy contains both %q and %q", oldName, protoName)
+			}
+			document[protoName] = value
+			delete(document, oldName)
+		}
+	}
+	protoData, err := json.Marshal(document)
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenShell policy document: %w", err)
+	}
+	var protoPolicy sandboxv1.SandboxPolicy
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(protoData, &protoPolicy); err != nil {
+		return nil, fmt.Errorf("validate OpenShell policy: %w", err)
+	}
+	canonical, err := protojson.Marshal(&protoPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("encode validated OpenShell policy: %w", err)
+	}
+	var policy openshellv1.SandboxPolicy
+	if err := json.Unmarshal(canonical, &policy); err != nil {
+		return nil, fmt.Errorf("convert OpenShell policy to SDK types: %w", err)
+	}
+	return &policy, nil
 }
 
 type sandboxObservation struct {
@@ -414,85 +460,15 @@ type sandboxObservation struct {
 	Labels map[string]string
 }
 
-func decodeSandbox(output []byte) (sandboxObservation, error) {
-	if len(strings.TrimSpace(string(output))) == 0 {
-		return sandboxObservation{Phase: "Creating"}, nil
-	}
-
-	var value any
-	if err := json.Unmarshal(output, &value); err != nil {
-		return sandboxObservation{}, fmt.Errorf("decode OpenShell JSON response: %w", err)
+func observeSandbox(sandbox *openshellv1.Sandbox) sandboxObservation {
+	if sandbox == nil {
+		return sandboxObservation{Phase: string(openshelltypes.SandboxUnknown)}
 	}
 	return sandboxObservation{
-		ID:     findString(value, "id", "sandbox_id", "sandboxId"),
-		Phase:  findString(value, "phase", "state", "status"),
-		Labels: findStringMap(value, "labels"),
-	}, nil
-}
-
-func findString(value any, keys ...string) string {
-	switch typed := value.(type) {
-	case map[string]any:
-		for _, key := range keys {
-			if candidate, ok := typed[key].(string); ok {
-				return candidate
-			}
-		}
-		for _, child := range typed {
-			if candidate := findString(child, keys...); candidate != "" {
-				return candidate
-			}
-		}
-	case []any:
-		for _, child := range typed {
-			if candidate := findString(child, keys...); candidate != "" {
-				return candidate
-			}
-		}
+		ID:     sandbox.ID,
+		Phase:  string(sandbox.Status.Phase),
+		Labels: cloneMap(sandbox.Labels),
 	}
-	return ""
-}
-
-func findStringMap(value any, key string) map[string]string {
-	switch typed := value.(type) {
-	case map[string]any:
-		if raw, ok := typed[key].(map[string]any); ok {
-			result := make(map[string]string, len(raw))
-			for label, value := range raw {
-				if stringValue, ok := value.(string); ok {
-					result[label] = stringValue
-				}
-			}
-			return result
-		}
-		for _, child := range typed {
-			if result := findStringMap(child, key); result != nil {
-				return result
-			}
-		}
-	case []any:
-		for _, child := range typed {
-			if result := findStringMap(child, key); result != nil {
-				return result
-			}
-		}
-	}
-	return nil
-}
-
-func isNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	var commandErr *OpenShellCommandError
-	message := err.Error()
-	if errors.As(err, &commandErr) {
-		message = commandErr.Output
-	}
-	message = strings.ToLower(message)
-	return strings.Contains(message, "not found") ||
-		strings.Contains(message, "does not exist") ||
-		strings.Contains(message, "no sandbox")
 }
 
 func (r *SandboxRequestReconciler) recordObserved(
@@ -558,12 +534,14 @@ func displayPhase(phase string) string {
 	return phase
 }
 
-func sortedPairs(values map[string]string) []string {
-	result := make([]string, 0, len(values))
-	for key, value := range values {
-		result = append(result, key+"="+value)
+func cloneMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
 	}
-	sort.Strings(result)
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
 	return result
 }
 

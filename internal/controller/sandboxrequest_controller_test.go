@@ -18,11 +18,9 @@ package controller
 
 import (
 	"context"
-	"errors"
-	"os"
-	"slices"
-	"strings"
 
+	openshellv1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1"
+	openshellfake "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/fake"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -34,39 +32,14 @@ import (
 	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
 )
 
-type fakeOpenShellRunner struct {
-	exists      bool
-	calls       [][]string
-	createCalls [][]string
+type fakeOpenShellClientFactory struct {
+	client   openshellv1.ClientInterface
+	gateways []appsv1alpha1.SandboxGatewaySpec
 }
 
-func (f *fakeOpenShellRunner) Run(_ context.Context, args ...string) ([]byte, error) {
-	copyArgs := slices.Clone(args)
-	f.calls = append(f.calls, copyArgs)
-
-	switch {
-	case len(args) >= 2 && args[0] == "sandbox" && args[1] == "get":
-		if !f.exists {
-			return nil, &OpenShellCommandError{Output: "sandbox not found", Err: errors.New("exit status 1")}
-		}
-		return []byte(`{"sandbox":{"id":"sandbox-123","state":"running"}}`), nil
-	case len(args) >= 2 && args[0] == "sandbox" && args[1] == "create":
-		f.exists = true
-		f.createCalls = append(f.createCalls, copyArgs)
-		policyIndex := slices.Index(args, "--policy")
-		Expect(policyIndex).To(BeNumerically(">=", 0))
-		_, err := os.Stat(args[policyIndex+1])
-		Expect(err).NotTo(HaveOccurred())
-		return []byte(`{"sandbox":{"id":"sandbox-123","state":"creating"}}`), nil
-	case len(args) >= 2 && args[0] == "sandbox" && args[1] == "delete":
-		if !f.exists {
-			return nil, &OpenShellCommandError{Output: "sandbox not found", Err: errors.New("exit status 1")}
-		}
-		f.exists = false
-		return nil, nil
-	default:
-		return nil, errors.New("unexpected OpenShell invocation")
-	}
+func (f *fakeOpenShellClientFactory) NewClient(gateway appsv1alpha1.SandboxGatewaySpec) (*OpenShellClientSession, error) {
+	f.gateways = append(f.gateways, gateway)
+	return &OpenShellClientSession{Client: f.client, Close: func() error { return nil }}, nil
 }
 
 var _ = Describe("SandboxRequest Controller", func() {
@@ -79,17 +52,25 @@ var _ = Describe("SandboxRequest Controller", func() {
 	key := types.NamespacedName{Name: resourceName, Namespace: "default"}
 	policyKey := types.NamespacedName{Name: policyName, Namespace: "default"}
 
-	It("creates, replaces, observes, and deletes a sandbox", func() {
+	It("creates, replaces, observes, and deletes a sandbox through the SDK", func() {
 		policy := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: "default"},
-			Data:       map[string]string{"policy.yaml": "version: 1\n"},
+			Data: map[string]string{"policy.yaml": `version: 1
+filesystem_policy:
+  read_only: [/usr]
+  read_write: [/sandbox]
+`},
 		}
 		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
 
+		gateway := appsv1alpha1.SandboxGatewaySpec{
+			Endpoint: "http://openshell.openshell.svc.cluster.local:8080",
+			Insecure: true,
+		}
 		request := &appsv1alpha1.SandboxRequest{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
 			Spec: appsv1alpha1.SandboxRequestSpec{
-				Gateway:   appsv1alpha1.SandboxGatewaySpec{Name: "local-gateway"},
+				Gateway:   gateway,
 				Workspace: "pipelines",
 				Image:     "quay.io/cpgtoacp/component:test",
 				Command:   []string{"python", "-m", "component"},
@@ -105,44 +86,44 @@ var _ = Describe("SandboxRequest Controller", func() {
 		}
 		Expect(k8sClient.Create(ctx, request)).To(Succeed())
 
-		runner := &fakeOpenShellRunner{}
-		reconciler := &SandboxRequestReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Runner: runner}
+		sdkClient := openshellfake.NewClient()
+		DeferCleanup(sdkClient.Close)
+		factory := &fakeOpenShellClientFactory{client: sdkClient}
+		reconciler := &SandboxRequestReconciler{
+			Client:        k8sClient,
+			Scheme:        k8sClient.Scheme(),
+			ClientFactory: factory,
+		}
 
 		By("adding the cleanup finalizer before creating an external resource")
 		result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Requeue).To(BeTrue())
-		Expect(runner.calls).To(BeEmpty())
+		Expect(factory.gateways).To(BeEmpty())
 
 		By("creating the requested sandbox")
 		result, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(pollInterval))
-		Expect(runner.createCalls).To(HaveLen(1))
-		createArgs := runner.createCalls[0]
-		Expect(createArgs).To(ContainElements(
-			"--name", resourceName,
-			"--from", "quay.io/cpgtoacp/component:test",
-			"--gateway", "local-gateway",
-			"--workspace", "pipelines",
-			"--provider", "llm-credentials",
-			"--env", "LOG_LEVEL=info",
-			"--cpu", "500m",
-			"--memory", "512Mi",
-		))
-		Expect(strings.Join(createArgs, " ")).To(ContainSubstring("-- python -m component"))
-		Expect(createArgs).NotTo(ContainElement("--output"))
-		specHashLabel := ""
-		for index, arg := range createArgs {
-			if arg == "--label" && index+1 < len(createArgs) && strings.HasPrefix(createArgs[index+1], "cpgtoacp.io/spec-hash=") {
-				specHashLabel = strings.TrimPrefix(createArgs[index+1], "cpgtoacp.io/spec-hash=")
-			}
-		}
-		Expect(specHashLabel).To(HaveLen(63))
+		Expect(factory.gateways).To(ConsistOf(gateway, gateway))
+
+		sandbox, err := sdkClient.Sandboxes().Get(ctx, "pipelines", resourceName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sandbox.Spec.Template.Image).To(Equal("quay.io/cpgtoacp/component:test"))
+		Expect(sandbox.Spec.Template.Resources).To(Equal(map[string]any{
+			"limits": map[string]any{"cpu": "500m", "memory": "512Mi"},
+		}))
+		Expect(sandbox.Spec.Command).To(Equal([]string{"python", "-m", "component"}))
+		Expect(sandbox.Spec.Environment).To(Equal(map[string]string{"LOG_LEVEL": "info", "PORT": "8080"}))
+		Expect(sandbox.Spec.Providers).To(Equal([]string{"llm-credentials"}))
+		Expect(sandbox.Spec.Policy.Version).To(Equal(uint32(1)))
+		Expect(sandbox.Spec.Policy.Filesystem.ReadOnly).To(Equal([]string{"/usr"}))
+		Expect(sandbox.Spec.Policy.Filesystem.ReadWrite).To(Equal([]string{"/sandbox"}))
+		Expect(sandbox.Labels).To(HaveKeyWithValue("app.kubernetes.io/component", "worker"))
+		Expect(sandbox.Labels["cpgtoacp.io/spec-hash"]).To(HaveLen(63))
 
 		Expect(k8sClient.Get(ctx, key, request)).To(Succeed())
 		Expect(request.Status.SandboxName).To(Equal(resourceName))
-		Expect(request.Status.SandboxID).To(Equal("sandbox-123"))
 		Expect(request.Status.SpecHash).NotTo(BeEmpty())
 		Expect(request.Status.ObservedGeneration).To(Equal(request.Generation))
 		Expect(request.Status.Conditions).To(ContainElement(And(
@@ -153,19 +134,24 @@ var _ = Describe("SandboxRequest Controller", func() {
 
 		By("replacing the sandbox when policy content changes")
 		Expect(k8sClient.Get(ctx, policyKey, policy)).To(Succeed())
-		policy.Data["policy.yaml"] = "version: 1\nnetwork_policies: {}\n"
+		policy.Data["policy.yaml"] = "version: 2\nfilesystem_policy:\n  read_write: [/sandbox, /tmp]\n"
 		Expect(k8sClient.Update(ctx, policy)).To(Succeed())
 		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(runner.createCalls).To(HaveLen(2))
 		Expect(k8sClient.Get(ctx, key, request)).To(Succeed())
 		Expect(request.Status.SpecHash).NotTo(Equal(originalHash))
+		sandbox, err = sdkClient.Sandboxes().Get(ctx, "pipelines", resourceName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sandbox.Spec.Policy.Version).To(Equal(uint32(2)))
+		Expect(sandbox.Spec.Policy.Filesystem.ReadWrite).To(Equal([]string{"/sandbox", "/tmp"}))
 
-		By("reporting a running sandbox as ready")
+		By("reporting a ready sandbox")
+		_, err = sdkClient.Sandboxes().WaitReady(ctx, "pipelines", resourceName)
+		Expect(err).NotTo(HaveOccurred())
 		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sClient.Get(ctx, key, request)).To(Succeed())
-		Expect(request.Status.Phase).To(Equal("running"))
+		Expect(request.Status.Phase).To(Equal("Ready"))
 		Expect(request.Status.Conditions).To(ContainElement(And(
 			HaveField("Type", readyCondition),
 			HaveField("Status", metav1.ConditionTrue),
@@ -179,7 +165,43 @@ var _ = Describe("SandboxRequest Controller", func() {
 			err := k8sClient.Get(ctx, key, &appsv1alpha1.SandboxRequest{})
 			return apierrors.IsNotFound(err)
 		}).Should(BeTrue())
+		_, err = sdkClient.Sandboxes().Get(ctx, "pipelines", resourceName)
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
 
 		Expect(k8sClient.Delete(ctx, policy)).To(Succeed())
+	})
+
+	It("rejects unknown policy fields", func() {
+		_, err := decodeSandboxPolicy([]byte("version: 1\nunknown_policy: true\n"))
+		Expect(err).To(MatchError(ContainSubstring("unknown field")))
+	})
+
+	It("decodes CLI-style network policy YAML into SDK types", func() {
+		policy, err := decodeSandboxPolicy([]byte(`version: 1
+filesystem_policy:
+  read_only: [/usr, /lib]
+  read_write: [/sandbox, /tmp, /app]
+network_policies:
+  artifact-store:
+    name: minio
+    endpoints:
+      - host: minio.default.svc.cluster.local
+        port: 9000
+        enforcement: enforce
+        allowed_ips: [10.0.0.0/8]
+    binaries:
+      - path: "**"
+`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(policy.Filesystem.ReadWrite).To(Equal([]string{"/sandbox", "/tmp", "/app"}))
+		Expect(policy.NetworkPolicies).To(HaveKey("artifact-store"))
+		rule := policy.NetworkPolicies["artifact-store"]
+		Expect(rule.Name).To(Equal("minio"))
+		Expect(rule.Endpoints).To(HaveLen(1))
+		Expect(rule.Endpoints[0].Host).To(Equal("minio.default.svc.cluster.local"))
+		Expect(rule.Endpoints[0].Port).To(Equal(uint32(9000)))
+		Expect(rule.Endpoints[0].AllowedIPs).To(Equal([]string{"10.0.0.0/8"}))
+		Expect(rule.Binaries).To(HaveLen(1))
+		Expect(rule.Binaries[0].Path).To(Equal("**"))
 	})
 })
