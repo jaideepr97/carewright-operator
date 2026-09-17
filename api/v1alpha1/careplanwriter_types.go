@@ -108,6 +108,10 @@ type DecisionServiceComponentSpec struct {
 
 // CarePlanWriterSpec defines the desired state of CarePlanWriter.
 type CarePlanWriterSpec struct {
+	// Sandbox configures OpenShell settings shared by all writer components.
+	// +optional
+	Sandbox PipelineSandboxSpec `json:"sandbox,omitempty"`
+
 	// ArtifactStore configures shared artifact and PHI storage.
 	// +optional
 	ArtifactStore *ArtifactStoreSpec `json:"artifactStore,omitempty"`

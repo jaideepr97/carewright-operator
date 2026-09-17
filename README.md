@@ -12,28 +12,32 @@ they run as policy-controlled sandboxes rather than ordinary Deployments.
 storage, MLflow tracing, LLM access, external service endpoints, and component
 behavior. Each component still owns its image. Credential fields refer to named
 OpenShell providers rather than embedding Kubernetes secret values in
-environment variables. The operator derives internal component and SonataFlow
-addresses and publishes user-facing entry points in status.
+environment variables. Each pipeline controller creates and owns one
+`SandboxRequest` per component, propagates changes into those requests, removes
+stale children, and summarizes their readiness on the parent resource.
 
 `extraEnv` and `extraProviders` are available on components for settings that do
 not yet have first-class fields. `extraEnv` is restricted to non-secret string
-values. The former component and workflow `env` arrays are no longer part of the
-v1alpha1 schema. The samples under `config/samples` show the complete first-pass
-fields.
+values. Each component also has first-class `command`, `policyRef`, and
+`resources` fields; the operator supplies the known image startup command when
+`command` is omitted. The former component and workflow `env` arrays are no
+longer part of the v1alpha1 schema. The samples under `config/samples` show the
+complete first-pass fields.
 
 ## OpenShell sandboxes
 
 A `SandboxRequest` declares an image, command, non-secret environment values,
 resource limits, credential providers, and an optional policy stored in a
-ConfigMap. The controller uses the OpenShell CLI to create and observe the
-sandbox. It replaces the sandbox when the request or referenced policy changes
-and deletes it when the request is deleted.
+ConfigMap. The controller uses the official OpenShell Go SDK to create and
+observe the sandbox. It replaces the sandbox when the request or referenced
+policy changes and deletes it when the request is deleted.
 
-For local development, install the OpenShell CLI and make sure its active
-gateway is reachable before running `make run`. The operator container includes
-the CLI; in-cluster requests should normally set `spec.gateway.endpoint` to a
-gateway URL reachable from the manager pod. `gateway.name` and
-`gateway.endpoint` are mutually exclusive.
+For local development, make sure the OpenShell gateway is reachable before
+running `make run`. Requests should normally set `spec.gateway.endpoint` to a
+gateway URL reachable from the manager process. If it is omitted, the controller
+uses `OPENSHELL_GATEWAY_ENDPOINT` and `OPENSHELL_GATEWAY_INSECURE`.
+`gateway.name` is retained for API compatibility but is not supported by the
+SDK-based controller.
 
 For focused local development, run only selected controllers with
 `--controllers`. For example, start only the SandboxRequest controller with:
@@ -52,7 +56,7 @@ ConfigMap-backed policy.
 ## Getting Started
 
 ### Prerequisites
-- go version v1.24.0+
+- go version v1.25.0+
 - docker version 17.03+.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.

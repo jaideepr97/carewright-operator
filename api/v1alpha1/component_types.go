@@ -16,13 +16,46 @@ limitations under the License.
 
 package v1alpha1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// PipelineSandboxSpec contains OpenShell settings shared by a pipeline's components.
+// +kubebuilder:validation:XValidation:rule="!has(self.gateway) || !(has(self.gateway.name) && has(self.gateway.endpoint))",message="gateway.name and gateway.endpoint are mutually exclusive"
+type PipelineSandboxSpec struct {
+	// Gateway selects the OpenShell gateway used by generated SandboxRequests.
+	// +optional
+	Gateway SandboxGatewaySpec `json:"gateway,omitempty"`
+
+	// Workspace is the OpenShell workspace containing the pipeline's sandboxes.
+	// +kubebuilder:default="default"
+	// +optional
+	Workspace string `json:"workspace,omitempty"`
+
+	// ApprovalMode controls how OpenShell handles tool approval requests.
+	// +kubebuilder:validation:Enum=manual;auto
+	// +optional
+	ApprovalMode string `json:"approvalMode,omitempty"`
+}
 
 // ComponentSpec describes the runtime shared by every pipeline component.
 type ComponentSpec struct {
 	// Image is the complete container image reference, including its registry and tag or digest.
 	// +kubebuilder:validation:MinLength=1
 	Image string `json:"image"`
+
+	// Command overrides the component's operator-supplied startup command.
+	// +optional
+	Command []string `json:"command,omitempty"`
+
+	// PolicyRef selects the OpenShell policy for this component.
+	// +optional
+	PolicyRef *corev1.ConfigMapKeySelector `json:"policyRef,omitempty"`
+
+	// Resources requests CPU, memory, and GPU resources for this component's sandbox.
+	// +optional
+	Resources SandboxResources `json:"resources,omitempty"`
 
 	// ExtraProviders attaches additional OpenShell credential providers to this component.
 	// Domain-specific providers should be configured on their corresponding integration.

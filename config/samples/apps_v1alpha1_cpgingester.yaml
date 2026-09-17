@@ -6,6 +6,11 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: cpgingester-sample
 spec:
+  sandbox:
+    gateway:
+      endpoint: http://openshell.openshell.svc.cluster.local:8080
+      insecure: true
+    workspace: default
   artifactStore:
     url: http://minio:9000
     artifactBucket: cpg-artifacts

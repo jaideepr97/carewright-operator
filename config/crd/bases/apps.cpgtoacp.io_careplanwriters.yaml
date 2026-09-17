@@ -96,6 +96,12 @@ spec:
                 description: BFF exposes the backend API used by the Care Plan Writer
                   UI.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   extraEnv:
                     additionalProperties:
                       type: string
@@ -114,9 +120,50 @@ spec:
                       including its registry and tag or digest.
                     minLength: 1
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
                   pythonPath:
                     description: PythonPath is translated to PYTHONPATH.
                     type: string
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
@@ -124,6 +171,12 @@ spec:
                 description: DecisionEngine provides the Python-facing wrapper around
                   the Kogito runtime.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   extraEnv:
                     additionalProperties:
                       type: string
@@ -142,9 +195,50 @@ spec:
                       including its registry and tag or digest.
                     minLength: 1
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
                   pythonPath:
                     description: PythonPath is translated to PYTHONPATH.
                     type: string
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
@@ -152,6 +246,12 @@ spec:
                 description: DecisionService runs the Kogito decision service used
                   to evaluate DMN.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   extraEnv:
                     additionalProperties:
                       type: string
@@ -173,12 +273,59 @@ spec:
                   javaOptions:
                     description: JavaOptions contains additional JVM options.
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
               fhirGeneration:
                 description: FHIRGeneration generates and reviews FHIR bundles.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   extraEnv:
                     additionalProperties:
                       type: string
@@ -197,9 +344,50 @@ spec:
                       including its registry and tag or digest.
                     minLength: 1
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
                   pythonPath:
                     description: PythonPath is translated to PYTHONPATH.
                     type: string
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
@@ -207,6 +395,12 @@ spec:
                 description: FHIRServer writes approved care plans to the configured
                   FHIR server.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   extraEnv:
                     additionalProperties:
                       type: string
@@ -225,9 +419,50 @@ spec:
                       including its registry and tag or digest.
                     minLength: 1
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
                   pythonPath:
                     description: PythonPath is translated to PYTHONPATH.
                     type: string
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
@@ -270,6 +505,12 @@ spec:
                 description: LLMReasoning resolves guidelines, evaluates decisions,
                   and composes plans.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   embedding:
                     description: Embedding configures guideline vector embeddings.
                     properties:
@@ -308,9 +549,50 @@ spec:
                       including its registry and tag or digest.
                     minLength: 1
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
                   pythonPath:
                     description: PythonPath is translated to PYTHONPATH.
                     type: string
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
@@ -318,6 +600,12 @@ spec:
                 description: MCP exposes the Care Plan Writer tools through the Model
                   Context Protocol.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   extraEnv:
                     additionalProperties:
                       type: string
@@ -336,9 +624,50 @@ spec:
                       including its registry and tag or digest.
                     minLength: 1
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
                   pythonPath:
                     description: PythonPath is translated to PYTHONPATH.
                     type: string
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
@@ -353,6 +682,12 @@ spec:
                 description: PatientData scans and normalizes patient data for the
                   workflow.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   extraEnv:
                     additionalProperties:
                       type: string
@@ -371,15 +706,99 @@ spec:
                       including its registry and tag or digest.
                     minLength: 1
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
                   pythonPath:
                     description: PythonPath is translated to PYTHONPATH.
                     type: string
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
+              sandbox:
+                description: Sandbox configures OpenShell settings shared by all writer
+                  components.
+                properties:
+                  approvalMode:
+                    description: ApprovalMode controls how OpenShell handles tool
+                      approval requests.
+                    enum:
+                    - manual
+                    - auto
+                    type: string
+                  gateway:
+                    description: Gateway selects the OpenShell gateway used by generated
+                      SandboxRequests.
+                    properties:
+                      endpoint:
+                        description: Endpoint is the URL of an OpenShell gateway.
+                        type: string
+                      insecure:
+                        description: Insecure permits plaintext HTTP or skips certificate
+                          verification for HTTPS.
+                        type: boolean
+                      name:
+                        description: |-
+                          Name is retained for compatibility with CLI-based controllers. SDK-based
+                          controllers require Endpoint instead.
+                        type: string
+                    type: object
+                  workspace:
+                    default: default
+                    description: Workspace is the OpenShell workspace containing the
+                      pipeline's sandboxes.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: gateway.name and gateway.endpoint are mutually exclusive
+                  rule: '!has(self.gateway) || !(has(self.gateway.name) && has(self.gateway.endpoint))'
               ui:
                 description: UI serves the Care Plan Writer web application.
                 properties:
+                  command:
+                    description: Command overrides the component's operator-supplied
+                      startup command.
+                    items:
+                      type: string
+                    type: array
                   extraEnv:
                     additionalProperties:
                       type: string
@@ -398,6 +817,47 @@ spec:
                       including its registry and tag or digest.
                     minLength: 1
                     type: string
+                  policyRef:
+                    description: PolicyRef selects the OpenShell policy for this component.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the ConfigMap or its key must
+                          be defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  resources:
+                    description: Resources requests CPU, memory, and GPU resources
+                      for this component's sandbox.
+                    properties:
+                      cpu:
+                        description: CPU is an OpenShell CPU quantity, for example
+                          "500m" or "2".
+                        type: string
+                      gpu:
+                        description: GPU is the number of GPUs requested by the sandbox.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      memory:
+                        description: Memory is an OpenShell memory quantity, for example
+                          "512Mi" or "2Gi".
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object

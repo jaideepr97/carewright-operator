@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
@@ -39,9 +40,9 @@ type CPGIngesterReconciler struct {
 // +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=cpgingesters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=cpgingesters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=cpgingesters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile records that the CPGIngester specification has been observed.
-// Workload reconciliation will be added as the component deployment contract evolves.
+// Reconcile creates and manages one SandboxRequest for each CPG Ingester component.
 func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -53,9 +54,16 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	if ingester.Status.ObservedGeneration == ingester.Generation &&
-		meta.IsStatusConditionTrue(ingester.Status.Conditions, "Accepted") {
-		return ctrl.Result{}, nil
+	summary, err := reconcileComponentSandboxes(
+		ctx,
+		r.Client,
+		r.Scheme,
+		&ingester,
+		ingester.Spec.Sandbox,
+		cpgIngesterComponents(&ingester),
+	)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	before := ingester.DeepCopy()
@@ -65,13 +73,14 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: ingester.Generation,
 		Reason:             "SpecAccepted",
-		Message:            "The CPGIngester specification has been accepted for reconciliation",
+		Message:            "The CPGIngester component sandboxes have been reconciled",
 	})
+	setSandboxReadyCondition(&ingester.Status.Conditions, ingester.Generation, summary)
 	if err := r.Status().Patch(ctx, &ingester, client.MergeFrom(before)); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	log.Info("accepted CPGIngester specification", "generation", ingester.Generation)
+	log.Info("reconciled CPGIngester sandboxes", "generation", ingester.Generation, "ready", summary.Ready, "desired", summary.Desired)
 
 	return ctrl.Result{}, nil
 }
@@ -80,6 +89,48 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *CPGIngesterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1alpha1.CPGIngester{}).
+		Owns(&appsv1alpha1.SandboxRequest{}).
 		Named("cpgingester").
 		Complete(r)
+}
+
+func cpgIngesterComponents(ingester *appsv1alpha1.CPGIngester) []sandboxComponent {
+	artifactEnv, artifactProvider := artifactStoreInputs(ingester.Spec.ArtifactStore)
+	observabilityEnv := observabilityInputs(ingester.Spec.Observability)
+	llmEnv, llmProvider := llmInputs(ingester.Spec.LLM)
+
+	ingestionEnv := mergedEnv(artifactEnv, observabilityEnv)
+	setIfNotEmpty(ingestionEnv, "LOG_LEVEL", ingester.Spec.Ingestion.LogLevel)
+	setIfNotEmpty(ingestionEnv, "DOCLING_LOG_LEVEL", ingester.Spec.Ingestion.DoclingLogLevel)
+	ingestionEnv["PYTHONUNBUFFERED"] = strconv.FormatBool(ingester.Spec.Ingestion.PythonUnbuffered)
+	setIfNotEmpty(ingestionEnv, "DOCLING_CACHE_DIR", ingester.Spec.Ingestion.DoclingCacheDirectory)
+	setIfNotEmpty(ingestionEnv, "DOCLING_ARTIFACTS_PATH", ingester.Spec.Ingestion.DoclingArtifactsPath)
+	ingestionEnv["HF_HUB_ENABLE_HF_TRANSFER"] = boolInt(ingester.Spec.Ingestion.HuggingFaceTransferEnabled)
+	ingestionEnv["HF_HUB_OFFLINE"] = boolInt(ingester.Spec.Ingestion.HuggingFaceOffline)
+	ingestionEnv["INGESTION_OCR_ENABLED"] = strconv.FormatBool(ingester.Spec.Ingestion.OCREnabled)
+
+	analysisEnv := mergedEnv(artifactEnv, observabilityEnv)
+	analysisEnv = mergedEnv(analysisEnv, llmEnv)
+	setIfNotEmpty(analysisEnv, "PYTHONPATH", ingester.Spec.LLMAnalysis.PythonPath)
+	analysisEnv["FIGURE_INTERPRETATION_ENABLED"] = strconv.FormatBool(ingester.Spec.LLMAnalysis.FigureInterpretationEnabled)
+	analysisEnv["FIGURE_INTERPRETATION_MAX_FIGURES"] = strconv.FormatInt(int64(ingester.Spec.LLMAnalysis.FigureInterpretationMaxFigures), 10)
+
+	pythonEnv := func(spec appsv1alpha1.PythonComponentSpec) map[string]string {
+		env := mergedEnv(artifactEnv, observabilityEnv)
+		setIfNotEmpty(env, "PYTHONPATH", spec.PythonPath)
+		return env
+	}
+	bffEnv := pythonEnv(ingester.Spec.BFF)
+	if ingester.Spec.ArtifactStore != nil {
+		setIfNotEmpty(bffEnv, "MINIO_ENDPOINT", ingester.Spec.ArtifactStore.URL)
+	}
+
+	return []sandboxComponent{
+		{Name: "ingestion", Spec: ingester.Spec.Ingestion.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.ingestion:app", "8080"), Env: ingestionEnv, Providers: []string{artifactProvider}},
+		{Name: "llm-analysis", Spec: ingester.Spec.LLMAnalysis.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.llm_analysis:app", "8080"), Env: analysisEnv, Providers: []string{artifactProvider, llmProvider}},
+		{Name: "assembly", Spec: ingester.Spec.Assembly.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.assembly_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Assembly), Providers: []string{artifactProvider}},
+		{Name: "delivery", Spec: ingester.Spec.Delivery.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.delivery_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Delivery), Providers: []string{artifactProvider}},
+		{Name: "bff", Spec: ingester.Spec.BFF.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.bff:app", "8080"), Env: bffEnv, Providers: []string{artifactProvider}},
+		{Name: "ui", Spec: ingester.Spec.UI, Command: []string{"/usr/libexec/s2i/run"}},
+	}
 }

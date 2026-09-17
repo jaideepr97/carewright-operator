@@ -22,9 +22,12 @@ import (
 
 	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
 
+	corev1 "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var _ = Describe("CPGIngester Controller", func() {
@@ -32,45 +35,117 @@ var _ = Describe("CPGIngester Controller", func() {
 	resourceKey := types.NamespacedName{Name: resourceName, Namespace: "default"}
 
 	AfterEach(func() {
+		var requests appsv1alpha1.SandboxRequestList
+		Expect(k8sClient.List(ctx, &requests, client.InNamespace("default"))).To(Succeed())
+		for index := range requests.Items {
+			if requests.Items[index].Labels[pipelineLabel] != "" {
+				Expect(k8sClient.Delete(ctx, &requests.Items[index])).To(Succeed())
+			}
+		}
 		resource := &appsv1alpha1.CPGIngester{}
 		if err := k8sClient.Get(ctx, resourceKey, resource); err == nil {
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		}
 	})
 
-	It("records that the current specification was accepted", func() {
-		image := func() appsv1alpha1.ComponentSpec {
-			return appsv1alpha1.ComponentSpec{Image: "example.invalid/test:latest"}
+	It("creates, updates, and reports readiness for component SandboxRequests", func() {
+		image := func(name string) appsv1alpha1.ComponentSpec {
+			return appsv1alpha1.ComponentSpec{Image: "example.invalid/" + name + ":latest"}
 		}
 		resource := &appsv1alpha1.CPGIngester{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
 			Spec: appsv1alpha1.CPGIngesterSpec{
-				LLM:         &appsv1alpha1.LLMConfigSpec{},
-				Ingestion:   appsv1alpha1.CPGIngestionComponentSpec{ComponentSpec: image()},
-				LLMAnalysis: appsv1alpha1.CPGLLMAnalysisComponentSpec{PythonComponentSpec: appsv1alpha1.PythonComponentSpec{ComponentSpec: image()}},
-				Assembly:    appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
-				Delivery:    appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
-				BFF:         appsv1alpha1.PythonComponentSpec{ComponentSpec: image()},
-				UI:          image(),
+				Sandbox: appsv1alpha1.PipelineSandboxSpec{
+					Gateway:   appsv1alpha1.SandboxGatewaySpec{Endpoint: "http://openshell.test:8080", Insecure: true},
+					Workspace: "pipelines",
+				},
+				ArtifactStore: &appsv1alpha1.ArtifactStoreSpec{
+					URL:                 "http://minio.test:9000",
+					ArtifactBucket:      "artifacts",
+					CredentialsProvider: "minio-provider",
+				},
+				Observability: &appsv1alpha1.ObservabilitySpec{MLflowTrackingURI: "http://mlflow.test:5000"},
+				LLM: &appsv1alpha1.LLMConfigSpec{
+					URL:                   "http://litellm.test:4000",
+					Model:                 "test-model",
+					CredentialsProvider:   "llm-provider",
+					RequestTimeoutSeconds: 30,
+				},
+				Ingestion: appsv1alpha1.CPGIngestionComponentSpec{ComponentSpec: image("ingestion"), OCREnabled: true},
+				LLMAnalysis: appsv1alpha1.CPGLLMAnalysisComponentSpec{
+					PythonComponentSpec:            appsv1alpha1.PythonComponentSpec{ComponentSpec: image("llm"), PythonPath: "/app/src"},
+					FigureInterpretationEnabled:    true,
+					FigureInterpretationMaxFigures: 12,
+				},
+				Assembly: appsv1alpha1.PythonComponentSpec{
+					ComponentSpec: appsv1alpha1.ComponentSpec{
+						Image:          "example.invalid/assembly:v1",
+						Command:        []string{"custom-assembly"},
+						PolicyRef:      &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "assembly-policy"}, Key: "policy.yaml"},
+						Resources:      appsv1alpha1.SandboxResources{CPU: "200m", Memory: "512Mi"},
+						ExtraProviders: []string{"extra-provider", "minio-provider"},
+						ExtraEnv:       map[string]string{"CUSTOM": "value", "PYTHONPATH": "ignored"},
+					},
+					PythonPath: "/app/src",
+				},
+				Delivery: appsv1alpha1.PythonComponentSpec{ComponentSpec: image("delivery")},
+				BFF:      appsv1alpha1.PythonComponentSpec{ComponentSpec: image("bff")},
+				UI:       image("ui"),
 			},
 		}
 		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-		reconciler := &CPGIngesterReconciler{Client: k8sClient}
+		reconciler := &CPGIngesterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
 		Expect(err).NotTo(HaveOccurred())
+
+		var requests appsv1alpha1.SandboxRequestList
+		Expect(k8sClient.List(ctx, &requests, client.InNamespace("default"), client.MatchingLabels{pipelineLabel: string(resource.UID)})).To(Succeed())
+		Expect(requests.Items).To(HaveLen(6))
+
+		assembly := &appsv1alpha1.SandboxRequest{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-assembly", Namespace: "default"}, assembly)).To(Succeed())
+		Expect(len(assembly.Spec.SandboxName)).To(BeNumerically("<=", 19))
+		Expect(assembly.Spec.SandboxName).To(Equal(componentSandboxName(resourceName, "assembly")))
+		Expect(assembly.Spec.Gateway.Endpoint).To(Equal("http://openshell.test:8080"))
+		Expect(assembly.Spec.Workspace).To(Equal("pipelines"))
+		Expect(assembly.Spec.Image).To(Equal("example.invalid/assembly:v1"))
+		Expect(assembly.Spec.Command).To(Equal([]string{"custom-assembly"}))
+		Expect(assembly.Spec.PolicyRef.Name).To(Equal("assembly-policy"))
+		Expect(assembly.Spec.Resources.Memory).To(Equal("512Mi"))
+		Expect(assembly.Spec.Providers).To(ConsistOf("minio-provider", "extra-provider"))
+		Expect(assembly.Spec.Env).To(HaveKeyWithValue("ARTIFACT_STORE_URL", "http://minio.test:9000"))
+		Expect(assembly.Spec.Env).To(HaveKeyWithValue("MLFLOW_TRACKING_URI", "http://mlflow.test:5000"))
+		Expect(assembly.Spec.Env).To(HaveKeyWithValue("PYTHONPATH", "/app/src"))
+		Expect(assembly.Spec.Env).To(HaveKeyWithValue("CUSTOM", "value"))
+		Expect(metav1.IsControlledBy(assembly, resource)).To(BeTrue())
+
+		analysis := &appsv1alpha1.SandboxRequest{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-llm-analysis", Namespace: "default"}, analysis)).To(Succeed())
+		Expect(analysis.Spec.Providers).To(ConsistOf("minio-provider", "llm-provider"))
+		Expect(analysis.Spec.Env).To(HaveKeyWithValue("LITELLM_URL", "http://litellm.test:4000"))
+		Expect(analysis.Spec.Env).To(HaveKeyWithValue("FIGURE_INTERPRETATION_MAX_FIGURES", "12"))
 
 		updated := &appsv1alpha1.CPGIngester{}
 		Expect(k8sClient.Get(ctx, resourceKey, updated)).To(Succeed())
 		Expect(updated.Status.ObservedGeneration).To(Equal(updated.Generation))
-		Expect(updated.Spec.LLM.Model).To(Equal("default"))
-		Expect(updated.Spec.LLM.RequestTimeoutSeconds).To(Equal(int32(600)))
-		Expect(updated.Spec.Ingestion.OCREnabled).To(BeTrue())
-		Expect(updated.Spec.LLMAnalysis.FigureInterpretationMaxFigures).To(Equal(int32(100)))
-		Expect(updated.Status.Conditions).To(ContainElement(And(
-			HaveField("Type", "Accepted"),
-			HaveField("Status", metav1.ConditionTrue),
-			HaveField("Reason", "SpecAccepted"),
-		)))
+		Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, readyCondition)).To(BeFalse())
+
+		for index := range requests.Items {
+			request := &requests.Items[index]
+			meta.SetStatusCondition(&request.Status.Conditions, metav1.Condition{Type: readyCondition, Status: metav1.ConditionTrue, Reason: "Ready"})
+			Expect(k8sClient.Status().Update(ctx, request)).To(Succeed())
+		}
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, resourceKey, updated)).To(Succeed())
+		Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, readyCondition)).To(BeTrue())
+
+		updated.Spec.Assembly.Image = "example.invalid/assembly:v2"
+		Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: assembly.Name, Namespace: "default"}, assembly)).To(Succeed())
+		Expect(assembly.Spec.Image).To(Equal("example.invalid/assembly:v2"))
 	})
 })

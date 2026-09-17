@@ -78,6 +78,10 @@ type CPGLLMAnalysisComponentSpec struct {
 
 // CPGIngesterSpec defines the desired state of CPGIngester.
 type CPGIngesterSpec struct {
+	// Sandbox configures OpenShell settings shared by all ingester components.
+	// +optional
+	Sandbox PipelineSandboxSpec `json:"sandbox,omitempty"`
+
 	// ArtifactStore configures shared artifact storage.
 	// +optional
 	ArtifactStore *ArtifactStoreSpec `json:"artifactStore,omitempty"`
