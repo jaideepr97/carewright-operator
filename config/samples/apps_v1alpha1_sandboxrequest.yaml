@@ -31,5 +31,8 @@ spec:
   resources:
     cpu: 100m
     memory: 128Mi
+  services:
+    - name: http
+      targetPort: 8080
   labels:
     app.kubernetes.io/component: sample

@@ -27,10 +27,12 @@ complete first-pass fields.
 ## OpenShell sandboxes
 
 A `SandboxRequest` declares an image, command, non-secret environment values,
-resource limits, credential providers, and an optional policy stored in a
-ConfigMap. The controller uses the official OpenShell Go SDK to create and
-observe the sandbox. It replaces the sandbox when the request or referenced
-policy changes and deletes it when the request is deleted.
+resource limits, credential providers, HTTP services, and an optional policy
+stored in a ConfigMap. The controller uses the official OpenShell Go SDK to
+create and observe the sandbox. For every `spec.services` entry, it asks the
+gateway to expose the target port and publishes the generated endpoint under
+`status.services[].url`. Service-only changes do not replace the sandbox. It
+deletes the sandbox when the request is deleted.
 
 For local development, make sure the OpenShell gateway is reachable before
 running `make run`. Requests should normally set `spec.gateway.endpoint` to a

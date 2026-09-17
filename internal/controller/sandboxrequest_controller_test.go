@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	openshellv1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1"
 	openshellfake "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/fake"
@@ -35,6 +36,71 @@ import (
 type fakeOpenShellClientFactory struct {
 	client   openshellv1.ClientInterface
 	gateways []appsv1alpha1.SandboxGatewaySpec
+}
+
+type serviceAwareFakeClient struct {
+	openshellv1.ClientInterface
+	services *fakeServiceClient
+}
+
+func (c *serviceAwareFakeClient) Services() openshellv1.ServiceInterface {
+	return c.services
+}
+
+type fakeServiceClient struct {
+	endpoints map[string]*openshellv1.ServiceEndpoint
+}
+
+func newFakeServiceClient() *fakeServiceClient {
+	return &fakeServiceClient{endpoints: map[string]*openshellv1.ServiceEndpoint{}}
+}
+
+func serviceKey(workspace, sandboxName, serviceName string) string {
+	return workspace + "/" + sandboxName + "/" + serviceName
+}
+
+func (c *fakeServiceClient) Expose(_ context.Context, workspace, sandboxName, serviceName string, targetPort uint32, domain bool) (*openshellv1.ServiceEndpoint, error) {
+	endpoint := &openshellv1.ServiceEndpoint{
+		ID:          "endpoint-" + serviceName,
+		SandboxName: sandboxName,
+		ServiceName: serviceName,
+		TargetPort:  targetPort,
+		Domain:      domain,
+		URL:         fmt.Sprintf("https://%s-%s.example.test", sandboxName, serviceName),
+		Workspace:   workspace,
+	}
+	c.endpoints[serviceKey(workspace, sandboxName, serviceName)] = endpoint
+	copy := *endpoint
+	return &copy, nil
+}
+
+func (c *fakeServiceClient) Get(_ context.Context, workspace, sandboxName, serviceName string) (*openshellv1.ServiceEndpoint, error) {
+	endpoint, exists := c.endpoints[serviceKey(workspace, sandboxName, serviceName)]
+	if !exists {
+		return nil, &openshellv1.StatusError{Code: openshellv1.ErrorNotFound, Message: "service not found"}
+	}
+	copy := *endpoint
+	return &copy, nil
+}
+
+func (c *fakeServiceClient) List(_ context.Context, workspace, sandboxName string, _ ...openshellv1.ListOptions) ([]*openshellv1.ServiceEndpoint, error) {
+	result := []*openshellv1.ServiceEndpoint{}
+	for _, endpoint := range c.endpoints {
+		if endpoint.Workspace == workspace && endpoint.SandboxName == sandboxName {
+			copy := *endpoint
+			result = append(result, &copy)
+		}
+	}
+	return result, nil
+}
+
+func (c *fakeServiceClient) Delete(_ context.Context, workspace, sandboxName, serviceName string) error {
+	key := serviceKey(workspace, sandboxName, serviceName)
+	if _, exists := c.endpoints[key]; !exists {
+		return &openshellv1.StatusError{Code: openshellv1.ErrorNotFound, Message: "service not found"}
+	}
+	delete(c.endpoints, key)
+	return nil
 }
 
 func (f *fakeOpenShellClientFactory) NewClient(gateway appsv1alpha1.SandboxGatewaySpec) (*OpenShellClientSession, error) {
@@ -81,14 +147,21 @@ filesystem_policy:
 				Providers: []string{"llm-credentials"},
 				Env:       map[string]string{"LOG_LEVEL": "info", "PORT": "8080"},
 				Resources: appsv1alpha1.SandboxResources{CPU: "500m", Memory: "512Mi"},
-				Labels:    map[string]string{"app.kubernetes.io/component": "worker"},
+				Services: []appsv1alpha1.SandboxServiceSpec{{
+					Name: "http", TargetPort: 8080,
+				}},
+				Labels: map[string]string{"app.kubernetes.io/component": "worker"},
 			},
 		}
 		Expect(k8sClient.Create(ctx, request)).To(Succeed())
 
 		sdkClient := openshellfake.NewClient()
 		DeferCleanup(sdkClient.Close)
-		factory := &fakeOpenShellClientFactory{client: sdkClient}
+		serviceClient := newFakeServiceClient()
+		factory := &fakeOpenShellClientFactory{client: &serviceAwareFakeClient{
+			ClientInterface: sdkClient,
+			services:        serviceClient,
+		}}
 		reconciler := &SandboxRequestReconciler{
 			Client:        k8sClient,
 			Scheme:        k8sClient.Scheme(),
@@ -156,6 +229,37 @@ filesystem_policy:
 			HaveField("Type", readyCondition),
 			HaveField("Status", metav1.ConditionTrue),
 		)))
+		Expect(request.Status.Services).To(Equal([]appsv1alpha1.SandboxServiceStatus{{
+			Name: "http", TargetPort: 8080, ID: "endpoint-http", URL: "https://test-sandbox-request-http.example.test",
+		}}))
+
+		By("replacing only the exposed endpoint when its target port changes")
+		sandboxID := request.Status.SandboxID
+		readyHash := request.Status.SpecHash
+		request.Spec.Services[0].TargetPort = 9090
+		Expect(k8sClient.Update(ctx, request)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, key, request)).To(Succeed())
+		Expect(request.Status.SandboxID).To(Equal(sandboxID))
+		Expect(request.Status.SpecHash).To(Equal(readyHash))
+		Expect(request.Status.Services).To(ContainElement(And(
+			HaveField("Name", "http"),
+			HaveField("TargetPort", int32(9090)),
+		)))
+		endpoint, err := serviceClient.Get(ctx, "pipelines", resourceName, "http")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(endpoint.TargetPort).To(Equal(uint32(9090)))
+
+		By("deleting an endpoint removed from the request")
+		request.Spec.Services = nil
+		Expect(k8sClient.Update(ctx, request)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, key, request)).To(Succeed())
+		Expect(request.Status.Services).To(BeEmpty())
+		_, err = serviceClient.Get(ctx, "pipelines", resourceName, "http")
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
 
 		By("deleting the external sandbox before removing the finalizer")
 		Expect(k8sClient.Delete(ctx, request)).To(Succeed())

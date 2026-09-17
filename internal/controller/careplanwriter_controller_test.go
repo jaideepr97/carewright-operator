@@ -118,6 +118,7 @@ var _ = Describe("CarePlanWriter Controller", func() {
 		decisionService := &appsv1alpha1.SandboxRequest{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-decision-service", Namespace: "default"}, decisionService)).To(Succeed())
 		Expect(decisionService.Spec.Command).To(Equal([]string{"java", "-jar", "/app/quarkus-run.jar"}))
+		Expect(decisionService.Spec.Services).To(Equal([]appsv1alpha1.SandboxServiceSpec{{Name: "http", TargetPort: 8081}}))
 		Expect(decisionService.Spec.Env).To(HaveKeyWithValue("JAVA_OPTS_APPEND", "-Xmx256m"))
 
 		updated := &appsv1alpha1.CarePlanWriter{}

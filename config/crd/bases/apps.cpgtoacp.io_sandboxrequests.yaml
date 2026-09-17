@@ -154,6 +154,35 @@ spec:
                 maxLength: 63
                 pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              services:
+                description: |-
+                  Services are HTTP endpoints the OpenShell gateway should expose from the sandbox.
+                  Changing only this field does not recreate the sandbox.
+                items:
+                  description: SandboxServiceSpec exposes an HTTP service running
+                    inside the sandbox.
+                  properties:
+                    name:
+                      description: Name identifies the service within the sandbox.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    targetPort:
+                      description: TargetPort is the TCP port on which the sandbox
+                        process listens.
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                  required:
+                  - name
+                  - targetPort
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               workspace:
                 default: default
                 description: Workspace is the OpenShell workspace containing the sandbox.
@@ -257,6 +286,34 @@ spec:
               sandboxName:
                 description: SandboxName is the effective OpenShell sandbox name.
                 type: string
+              services:
+                description: Services contains gateway-generated endpoints for the
+                  requested services.
+                items:
+                  description: SandboxServiceStatus reports an HTTP endpoint generated
+                    by the OpenShell gateway.
+                  properties:
+                    id:
+                      description: ID is the endpoint identifier reported by OpenShell.
+                      type: string
+                    name:
+                      description: Name identifies the service from spec.services.
+                      type: string
+                    targetPort:
+                      description: TargetPort is the TCP port exposed in the sandbox.
+                      format: int32
+                      type: integer
+                    url:
+                      description: URL is the gateway-generated URL for the service.
+                      type: string
+                  required:
+                  - name
+                  - targetPort
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               specHash:
                 description: SpecHash identifies the request and policy content used
                   to create the sandbox.

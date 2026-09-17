@@ -45,6 +45,7 @@ const (
 
 type sandboxComponent struct {
 	Name      string
+	Port      int32
 	Spec      appsv1alpha1.ComponentSpec
 	Command   []string
 	Env       map[string]string
@@ -96,6 +97,10 @@ func reconcileComponentSandboxes(
 				Providers:   uniqueStrings(providers),
 				Env:         mergedEnv(component.Spec.ExtraEnv, component.Env),
 				Resources:   component.Spec.Resources,
+				Services: []appsv1alpha1.SandboxServiceSpec{{
+					Name:       "http",
+					TargetPort: component.Port,
+				}},
 				Labels: map[string]string{
 					"app.kubernetes.io/component":  component.Name,
 					"app.kubernetes.io/instance":   safeLabelValue(owner.GetName()),

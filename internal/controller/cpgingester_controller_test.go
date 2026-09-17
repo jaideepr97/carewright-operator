@@ -113,6 +113,7 @@ var _ = Describe("CPGIngester Controller", func() {
 		Expect(assembly.Spec.Command).To(Equal([]string{"custom-assembly"}))
 		Expect(assembly.Spec.PolicyRef.Name).To(Equal("assembly-policy"))
 		Expect(assembly.Spec.Resources.Memory).To(Equal("512Mi"))
+		Expect(assembly.Spec.Services).To(Equal([]appsv1alpha1.SandboxServiceSpec{{Name: "http", TargetPort: 8080}}))
 		Expect(assembly.Spec.Providers).To(ConsistOf("minio-provider", "extra-provider"))
 		Expect(assembly.Spec.Env).To(HaveKeyWithValue("ARTIFACT_STORE_URL", "http://minio.test:9000"))
 		Expect(assembly.Spec.Env).To(HaveKeyWithValue("MLFLOW_TRACKING_URI", "http://mlflow.test:5000"))

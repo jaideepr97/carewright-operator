@@ -185,7 +185,15 @@ func (r *SandboxRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.fail(ctx, &request, "LookupFailed", err)
 	}
 
-	if err := r.recordObserved(ctx, &request, sandboxName, desiredHash, observed); err != nil {
+	var services []appsv1alpha1.SandboxServiceStatus
+	if sandboxReady(observed.Phase) {
+		services, err = r.reconcileServices(ctx, &request, sandboxName)
+		if err != nil {
+			return r.fail(ctx, &request, "ServiceExposureFailed", err)
+		}
+	}
+
+	if err := r.recordObserved(ctx, &request, sandboxName, desiredHash, observed, services); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -267,6 +275,9 @@ func (r *SandboxRequestReconciler) policy(ctx context.Context, request *appsv1al
 }
 
 func requestHash(spec appsv1alpha1.SandboxRequestSpec, policy []byte) (string, error) {
+	// Gateway service exposure is reconciled independently and must not replace
+	// an otherwise healthy sandbox when a port or service name changes.
+	spec.Services = nil
 	payload, err := json.Marshal(struct {
 		Spec   appsv1alpha1.SandboxRequestSpec `json:"spec"`
 		Policy []byte                          `json:"policy,omitempty"`
@@ -277,6 +288,59 @@ func requestHash(spec appsv1alpha1.SandboxRequestSpec, policy []byte) (string, e
 	sum := sha256.Sum256(payload)
 	// OpenShell labels share Kubernetes' 63-character label-value limit.
 	return hex.EncodeToString(sum[:])[:63], nil
+}
+
+func (r *SandboxRequestReconciler) reconcileServices(
+	ctx context.Context,
+	request *appsv1alpha1.SandboxRequest,
+	sandboxName string,
+) ([]appsv1alpha1.SandboxServiceStatus, error) {
+	session, err := r.clientSession(request.Spec.Gateway)
+	if err != nil {
+		return nil, err
+	}
+	defer closeSession(session)
+
+	desired := make(map[string]appsv1alpha1.SandboxServiceSpec, len(request.Spec.Services))
+	for _, service := range request.Spec.Services {
+		desired[service.Name] = service
+	}
+	for _, previous := range request.Status.Services {
+		if _, keep := desired[previous.Name]; keep {
+			continue
+		}
+		if err := session.Client.Services().Delete(ctx, workspace(request), sandboxName, previous.Name); err != nil && !openshellv1.IsNotFound(err) {
+			return nil, fmt.Errorf("delete stale service %q: %w", previous.Name, err)
+		}
+	}
+
+	result := make([]appsv1alpha1.SandboxServiceStatus, 0, len(request.Spec.Services))
+	for _, service := range request.Spec.Services {
+		endpoint, err := session.Client.Services().Get(ctx, workspace(request), sandboxName, service.Name)
+		needsExposure := openshellv1.IsNotFound(err)
+		if err == nil && (endpoint.TargetPort != uint32(service.TargetPort) || !endpoint.Domain || endpoint.URL == "") { // #nosec G115 -- CRD validation limits the port to uint16 range.
+			if err := session.Client.Services().Delete(ctx, workspace(request), sandboxName, service.Name); err != nil && !openshellv1.IsNotFound(err) {
+				return nil, fmt.Errorf("replace service %q: %w", service.Name, err)
+			}
+			needsExposure = true
+		}
+		if needsExposure {
+			endpoint, err = session.Client.Services().Expose(ctx, workspace(request), sandboxName, service.Name, uint32(service.TargetPort), true) // #nosec G115 -- CRD validation limits the port to uint16 range.
+		}
+		if err != nil {
+			return nil, fmt.Errorf("expose service %q on port %d: %w", service.Name, service.TargetPort, err)
+		}
+		if endpoint == nil || endpoint.URL == "" {
+			return nil, fmt.Errorf("expose service %q on port %d: gateway returned no URL", service.Name, service.TargetPort)
+		}
+		result = append(result, appsv1alpha1.SandboxServiceStatus{
+			Name:       service.Name,
+			TargetPort: int32(endpoint.TargetPort), // #nosec G115 -- target ports are constrained to uint16 range.
+			ID:         endpoint.ID,
+			URL:        endpoint.URL,
+		})
+	}
+	return result, nil
 }
 
 func effectiveSandboxName(request *appsv1alpha1.SandboxRequest) string {
@@ -477,6 +541,7 @@ func (r *SandboxRequestReconciler) recordObserved(
 	name string,
 	specHash string,
 	observation sandboxObservation,
+	services []appsv1alpha1.SandboxServiceStatus,
 ) error {
 	before := request.DeepCopy()
 	request.Status.SandboxName = name
@@ -486,6 +551,7 @@ func (r *SandboxRequestReconciler) recordObserved(
 	request.Status.SpecHash = specHash
 	request.Status.ObservedGeneration = request.Generation
 	request.Status.Phase = observation.Phase
+	request.Status.Services = services
 
 	condition := metav1.Condition{
 		Type:               readyCondition,
@@ -494,15 +560,23 @@ func (r *SandboxRequestReconciler) recordObserved(
 		Reason:             "SandboxProgressing",
 		Message:            fmt.Sprintf("OpenShell sandbox %q is %s", name, displayPhase(observation.Phase)),
 	}
-	switch strings.ToLower(observation.Phase) {
-	case "ready", "running":
+	switch {
+	case sandboxReady(observation.Phase) && len(request.Status.Services) == len(request.Spec.Services):
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = "SandboxReady"
-	case "failed", "error":
+		if len(request.Spec.Services) != 0 {
+			condition.Reason = "SandboxServicesReady"
+			condition.Message = fmt.Sprintf("OpenShell sandbox %q and all %d services are ready", name, len(request.Spec.Services))
+		}
+	case strings.EqualFold(observation.Phase, "failed"), strings.EqualFold(observation.Phase, "error"):
 		condition.Reason = "SandboxFailed"
 	}
 	meta.SetStatusCondition(&request.Status.Conditions, condition)
 	return r.Status().Patch(ctx, request, client.MergeFrom(before))
+}
+
+func sandboxReady(phase string) bool {
+	return strings.EqualFold(phase, "ready") || strings.EqualFold(phase, "running")
 }
 
 func (r *SandboxRequestReconciler) fail(

@@ -27,6 +27,9 @@ spec:
   resources:
     cpu: 200m
     memory: 512Mi
+  services:
+    - name: http
+      targetPort: 8080
   labels:
     app.kubernetes.io/component: assembly
     app.kubernetes.io/part-of: cpg-ingester
