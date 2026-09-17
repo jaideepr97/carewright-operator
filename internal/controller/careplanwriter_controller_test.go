@@ -22,6 +22,7 @@ import (
 
 	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -107,7 +108,7 @@ var _ = Describe("CarePlanWriter Controller", func() {
 		Expect(reasoning.Spec.ApprovalMode).To(Equal("auto"))
 		Expect(reasoning.Spec.Providers).To(ConsistOf("minio-provider", "llm-provider", "embedding-provider"))
 		Expect(reasoning.Spec.Env).To(HaveKeyWithValue("EMBEDDING_BASE_URL", "https://embedding.test"))
-		Expect(reasoning.Spec.Env).To(HaveKeyWithValue("DECISION_ENGINE_URL", "http://"+resourceName+"-decision-engine:8080"))
+		Expect(reasoning.Spec.Env).NotTo(HaveKey("DECISION_ENGINE_URL"))
 
 		fhir := &appsv1alpha1.SandboxRequest{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-fhir-server", Namespace: "default"}, fhir)).To(Succeed())
@@ -126,5 +127,33 @@ var _ = Describe("CarePlanWriter Controller", func() {
 		Expect(updated.Status.ObservedGeneration).To(Equal(updated.Generation))
 		Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, "Accepted")).To(BeTrue())
 		Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, readyCondition)).To(BeFalse())
+
+		for index := range requests.Items {
+			request := &requests.Items[index]
+			request.Status.ObservedGeneration = request.Generation
+			request.Status.Services = []appsv1alpha1.SandboxServiceStatus{{
+				Name: "http", TargetPort: request.Spec.Services[0].TargetPort, URL: "https://" + request.Labels[componentLabel] + ".gateway.test",
+			}}
+			meta.SetStatusCondition(&request.Status.Conditions, metav1.Condition{
+				Type: readyCondition, Status: metav1.ConditionTrue, Reason: "Ready", ObservedGeneration: request.Generation,
+			})
+			Expect(k8sClient.Status().Update(ctx, request)).To(Succeed())
+		}
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-llm-reasoning", Namespace: "default"}, reasoning)).To(Succeed())
+		Expect(reasoning.Spec.Env).To(HaveKeyWithValue("DECISION_ENGINE_URL", "https://decision-engine.gateway.test"))
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-bff", Namespace: "default"}, &appsv1alpha1.SandboxRequest{})).To(Succeed())
+
+		workflow := sonataFlowObject()
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: workflowResourceName(resource), Namespace: "default"}, workflow)).To(Succeed())
+		workflowJSON, err := workflow.MarshalJSON()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(workflowJSON)).To(ContainSubstring("https://patient-data.gateway.test/api/v1/scan-async"))
+		Expect(string(workflowJSON)).To(ContainSubstring(workflowServiceURL(resource) + "/wait-review"))
+		props := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: workflowResourceName(resource) + "-props", Namespace: "default"}, props)).To(Succeed())
+		Expect(props.Data["application.properties"]).To(ContainSubstring("mp.messaging.incoming.careplan-reviewed.path=/wait-careplan-review"))
 	})
 })

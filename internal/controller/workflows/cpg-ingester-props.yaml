@@ -1,0 +1,30 @@
+---
+# SonataFlow user properties for the cpgingester workflow.
+#
+# REQUIRED for the pipeline to function: these properties map each inbound
+# CloudEvent channel to an HTTP endpoint (quarkus-http connector). The async
+# services (ingestion, llm-analysis) and the BFF review flow POST CloudEvents
+# to these /wait-* paths. Without this ConfigMap the workflow registers no
+# HTTP event endpoints, every callback 404s, and runs stall at the first
+# callback state (the parse never "completes" in the UI).
+#
+# The SonataFlow operator mounts <workflow-name>-props as the workflow's
+# application.properties. Content mirrors the verified-working deployment.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cpgingester-props
+  labels:
+    app.kubernetes.io/part-of: cpg-to-acp
+data:
+  application.properties: |
+    mp.messaging.incoming.parse-done.connector=quarkus-http
+    mp.messaging.incoming.parse-done.path=/wait-parse
+    mp.messaging.incoming.analyze-done.connector=quarkus-http
+    mp.messaging.incoming.analyze-done.path=/wait-analyze
+    mp.messaging.incoming.generate-done.connector=quarkus-http
+    mp.messaging.incoming.generate-done.path=/wait-generate
+    mp.messaging.incoming.manifest-reviewed.connector=quarkus-http
+    mp.messaging.incoming.manifest-reviewed.path=/wait-manifest-review
+    mp.messaging.incoming.artifacts-reviewed.connector=quarkus-http
+    mp.messaging.incoming.artifacts-reviewed.path=/wait-artifact-review

@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,8 +54,9 @@ type sandboxComponent struct {
 }
 
 type sandboxSummary struct {
-	Desired int
-	Ready   int
+	Desired   int
+	Ready     int
+	Endpoints map[string]string
 }
 
 func reconcileComponentSandboxes(
@@ -66,7 +68,8 @@ func reconcileComponentSandboxes(
 	components []sandboxComponent,
 ) (sandboxSummary, error) {
 	desired := make(map[string]struct{}, len(components))
-	summary := sandboxSummary{Desired: len(components)}
+	summary := sandboxSummary{Desired: len(components), Endpoints: map[string]string{}}
+	workflowHost := workflowServiceHost(owner)
 
 	for _, component := range components {
 		requestName := componentRequestName(owner.GetName(), component.Name)
@@ -101,6 +104,9 @@ func reconcileComponentSandboxes(
 					Name:       "http",
 					TargetPort: component.Port,
 				}},
+				NetworkAccess: []appsv1alpha1.SandboxNetworkAccessSpec{{
+					Name: "sonataflow", Host: workflowHost, Port: 80, Protocol: "rest",
+				}},
 				Labels: map[string]string{
 					"app.kubernetes.io/component":  component.Name,
 					"app.kubernetes.io/instance":   safeLabelValue(owner.GetName()),
@@ -113,7 +119,11 @@ func reconcileComponentSandboxes(
 		if err != nil {
 			return summary, fmt.Errorf("reconcile %s SandboxRequest: %w", component.Name, err)
 		}
-		if request.DeletionTimestamp.IsZero() && meta.IsStatusConditionTrue(request.Status.Conditions, readyCondition) {
+		if endpoint := sandboxServiceURL(request.Status.Services, "http"); endpoint != "" {
+			summary.Endpoints[component.Name] = endpoint
+		}
+		ready := meta.FindStatusCondition(request.Status.Conditions, readyCondition)
+		if request.DeletionTimestamp.IsZero() && ready != nil && ready.Status == metav1.ConditionTrue && ready.ObservedGeneration == request.Generation {
 			summary.Ready++
 		}
 	}
@@ -136,6 +146,44 @@ func reconcileComponentSandboxes(
 	}
 
 	return summary, nil
+}
+
+func componentServiceURLs(ctx context.Context, k8sClient client.Client, owner client.Object) (map[string]string, error) {
+	var requests appsv1alpha1.SandboxRequestList
+	if err := k8sClient.List(ctx, &requests,
+		client.InNamespace(owner.GetNamespace()),
+		client.MatchingLabels{managedByLabel: managedByValue, pipelineLabel: string(owner.GetUID())},
+	); err != nil {
+		return nil, fmt.Errorf("list pipeline SandboxRequests: %w", err)
+	}
+	result := make(map[string]string, len(requests.Items))
+	for index := range requests.Items {
+		request := &requests.Items[index]
+		if !metav1.IsControlledBy(request, owner) {
+			continue
+		}
+		if endpoint := sandboxServiceURL(request.Status.Services, "http"); endpoint != "" {
+			result[request.Labels[componentLabel]] = endpoint
+		}
+	}
+	return result, nil
+}
+
+func sandboxServiceURL(services []appsv1alpha1.SandboxServiceStatus, name string) string {
+	for _, service := range services {
+		if service.Name == name {
+			return strings.TrimRight(service.URL, "/")
+		}
+	}
+	return ""
+}
+
+func endpointHost(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	return strings.TrimRight(endpoint, "/")
 }
 
 func componentRequestName(ownerName, component string) string {
@@ -255,20 +303,4 @@ func boolInt(value bool) string {
 		return "1"
 	}
 	return "0"
-}
-
-func setSandboxReadyCondition(conditions *[]metav1.Condition, generation int64, summary sandboxSummary) {
-	condition := metav1.Condition{
-		Type:               readyCondition,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: generation,
-		Reason:             "SandboxesPending",
-		Message:            fmt.Sprintf("%d of %d component sandboxes are ready", summary.Ready, summary.Desired),
-	}
-	if summary.Ready == summary.Desired {
-		condition.Status = metav1.ConditionTrue
-		condition.Reason = "SandboxesReady"
-		condition.Message = fmt.Sprintf("All %d component sandboxes are ready", summary.Desired)
-	}
-	meta.SetStatusCondition(conditions, condition)
 }

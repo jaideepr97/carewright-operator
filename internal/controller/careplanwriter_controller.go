@@ -18,8 +18,10 @@ package controller
 
 import (
 	"context"
+	"maps"
 	"strconv"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,6 +43,8 @@ type CarePlanWriterReconciler struct {
 // +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=careplanwriters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=careplanwriters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=sonataflow.org,resources=sonataflows,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile creates and manages one SandboxRequest for each Care Plan Writer component.
 func (r *CarePlanWriterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -54,20 +58,44 @@ func (r *CarePlanWriterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	knownEndpoints, err := componentServiceURLs(ctx, r.Client, &writer)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	summary, err := reconcileComponentSandboxes(
 		ctx,
 		r.Client,
 		r.Scheme,
 		&writer,
 		writer.Spec.Sandbox,
-		carePlanWriterComponents(&writer),
+		carePlanWriterComponents(&writer, knownEndpoints),
 	)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	workflow, err := reconcilePipelineWorkflow(ctx, r.Client, r.Scheme, &writer, pipelineWorkflowTemplate{
+		WorkflowYAML: carePlanWriterWorkflowYAML,
+		PropsYAML:    carePlanWriterPropsYAML,
+		Replacements: map[string]string{
+			"http://acp-patient-data:8080":    "patient-data",
+			"http://acp-llm-reasoning:8080":   "llm-reasoning",
+			"http://acp-decision-engine:8080": "decision-engine",
+			"http://acp-fhir-generation:8080": "fhir-generation",
+			"http://acp-fhir-server:8080":     "fhir-server",
+			"http://acp-bff:8080":             "bff",
+		},
+	}, summary.Endpoints, summary.Desired)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	before := writer.DeepCopy()
 	writer.Status.ObservedGeneration = writer.Generation
+	writer.Status.Endpoints = maps.Clone(summary.Endpoints)
+	if workflow.Created {
+		writer.Status.Endpoints["workflow"] = workflow.URL
+	}
 	meta.SetStatusCondition(&writer.Status.Conditions, metav1.Condition{
 		Type:               "Accepted",
 		Status:             metav1.ConditionTrue,
@@ -75,7 +103,7 @@ func (r *CarePlanWriterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		Reason:             "SpecAccepted",
 		Message:            "The CarePlanWriter component sandboxes have been reconciled",
 	})
-	setSandboxReadyCondition(&writer.Status.Conditions, writer.Generation, summary)
+	setPipelineReadyCondition(&writer.Status.Conditions, writer.Generation, summary, workflow)
 	if err := r.Status().Patch(ctx, &writer, client.MergeFrom(before)); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -90,11 +118,13 @@ func (r *CarePlanWriterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1alpha1.CarePlanWriter{}).
 		Owns(&appsv1alpha1.SandboxRequest{}).
+		Owns(sonataFlowObject()).
+		Owns(&corev1.ConfigMap{}).
 		Named("careplanwriter").
 		Complete(r)
 }
 
-func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter) []sandboxComponent {
+func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter, endpoints map[string]string) []sandboxComponent {
 	artifactEnv, artifactProvider := artifactStoreInputs(writer.Spec.ArtifactStore)
 	observabilityEnv := observabilityInputs(writer.Spec.Observability)
 	llmEnv, llmProvider := llmInputs(writer.Spec.LLM)
@@ -110,13 +140,13 @@ func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter) []sandboxComp
 		return mergedEnv(env, llmEnv)
 	}
 
-	decisionServiceURL := "http://" + componentRequestName(writer.Name, "decision-service") + ":8081"
-	decisionEngineURL := "http://" + componentRequestName(writer.Name, "decision-engine") + ":8080"
-	llmReasoningURL := "http://" + componentRequestName(writer.Name, "llm-reasoning") + ":8080"
-	fhirServerURL := "http://" + componentRequestName(writer.Name, "fhir-server") + ":8080"
+	decisionServiceURL := endpoints["decision-service"]
+	decisionEngineURL := endpoints["decision-engine"]
+	llmReasoningURL := endpoints["llm-reasoning"]
+	fhirServerURL := endpoints["fhir-server"]
 
 	reasoningEnv := llmPythonEnv(writer.Spec.LLMReasoning.PythonComponentSpec)
-	reasoningEnv["DECISION_ENGINE_URL"] = decisionEngineURL
+	setIfNotEmpty(reasoningEnv, "DECISION_ENGINE_URL", decisionEngineURL)
 	embeddingProvider := ""
 	if embedding := writer.Spec.LLMReasoning.Embedding; embedding != nil {
 		setIfNotEmpty(reasoningEnv, "EMBEDDING_PROVIDER", embedding.Provider)
@@ -126,7 +156,7 @@ func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter) []sandboxComp
 	}
 
 	decisionEnv := pythonEnv(writer.Spec.DecisionEngine)
-	decisionEnv["KOGITO_URL"] = decisionServiceURL
+	setIfNotEmpty(decisionEnv, "KOGITO_URL", decisionServiceURL)
 
 	fhirGenerationEnv := llmPythonEnv(writer.Spec.FHIRGeneration)
 	if transparency := writer.Spec.AITransparency; transparency != nil {
@@ -152,14 +182,16 @@ func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter) []sandboxComp
 	if writer.Spec.ArtifactStore != nil {
 		setIfNotEmpty(bffEnv, "MINIO_ENDPOINT", writer.Spec.ArtifactStore.URL)
 	}
-	bffEnv["LLM_REASONING_URL"] = llmReasoningURL
-	bffEnv["DECISION_ENGINE_URL"] = decisionEngineURL
-	bffEnv["FHIR_SERVER_URL"] = fhirServerURL
+	bffEnv["SONATAFLOW_URL"] = workflowServiceURL(writer)
+	setIfNotEmpty(bffEnv, "LLM_REASONING_URL", llmReasoningURL)
+	setIfNotEmpty(bffEnv, "DECISION_ENGINE_URL", decisionEngineURL)
+	setIfNotEmpty(bffEnv, "FHIR_SERVER_URL", fhirServerURL)
 
-	uiEnv := map[string]string{"BFF_HOST": componentRequestName(writer.Name, "bff") + ":8080"}
+	uiEnv := map[string]string{}
+	setIfNotEmpty(uiEnv, "BFF_HOST", endpointHost(endpoints["bff"]))
 	mcpEnv := llmPythonEnv(writer.Spec.MCP)
-	mcpEnv["KOGITO_URL"] = decisionServiceURL
-	mcpEnv["FHIR_SERVER_URL"] = fhirServerURL
+	setIfNotEmpty(mcpEnv, "KOGITO_URL", decisionServiceURL)
+	setIfNotEmpty(mcpEnv, "FHIR_SERVER_URL", fhirServerURL)
 	decisionServiceEnv := map[string]string{}
 	setIfNotEmpty(decisionServiceEnv, "JAVA_OPTS_APPEND", writer.Spec.DecisionService.JavaOptions)
 

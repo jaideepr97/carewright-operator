@@ -84,6 +84,30 @@ type SandboxServiceStatus struct {
 	URL string `json:"url,omitempty"`
 }
 
+// SandboxNetworkAccessSpec adds a named outbound endpoint to the sandbox policy.
+type SandboxNetworkAccessSpec struct {
+	// Name is the policy rule name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Host is the DNS name the sandbox may contact.
+	// +kubebuilder:validation:MinLength=1
+	Host string `json:"host"`
+
+	// Port is the destination TCP port.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
+
+	// Protocol selects OpenShell's application protocol inspection.
+	// +kubebuilder:validation:Enum=http;https;rest
+	// +kubebuilder:default=rest
+	// +optional
+	Protocol string `json:"protocol,omitempty"`
+}
+
 // SandboxRequestSpec defines an OpenShell sandbox and the process it should run.
 // The environment map is intended for non-secret values. OpenShell providers should
 // be used to make credentials available to the sandbox.
@@ -134,6 +158,13 @@ type SandboxRequestSpec struct {
 	// +listMapKey=name
 	// +optional
 	Services []SandboxServiceSpec `json:"services,omitempty"`
+
+	// NetworkAccess contains additional named egress endpoints merged into the
+	// referenced OpenShell policy.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	NetworkAccess []SandboxNetworkAccessSpec `json:"networkAccess,omitempty"`
 
 	// Labels are attached to the OpenShell sandbox.
 	// +optional

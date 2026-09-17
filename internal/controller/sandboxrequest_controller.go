@@ -388,6 +388,7 @@ func (r *SandboxRequestReconciler) createSandbox(
 	if err != nil {
 		return sandboxObservation{}, err
 	}
+	policy = mergeNetworkAccess(policy, request.Spec.NetworkAccess)
 
 	labels := make(map[string]string, len(request.Spec.Labels)+4)
 	for key, value := range request.Spec.Labels {
@@ -516,6 +517,35 @@ func decodeSandboxPolicy(data []byte) (*openshellv1.SandboxPolicy, error) {
 		return nil, fmt.Errorf("convert OpenShell policy to SDK types: %w", err)
 	}
 	return &policy, nil
+}
+
+func mergeNetworkAccess(policy *openshellv1.SandboxPolicy, access []appsv1alpha1.SandboxNetworkAccessSpec) *openshellv1.SandboxPolicy {
+	if len(access) == 0 {
+		return policy
+	}
+	if policy == nil {
+		policy = &openshellv1.SandboxPolicy{Version: 1}
+	}
+	if policy.NetworkPolicies == nil {
+		policy.NetworkPolicies = map[string]openshellv1.NetworkPolicyRule{}
+	}
+	for _, endpoint := range access {
+		protocol := endpoint.Protocol
+		if protocol == "" {
+			protocol = "rest"
+		}
+		policy.NetworkPolicies[endpoint.Name] = openshellv1.NetworkPolicyRule{
+			Name: endpoint.Name,
+			Endpoints: []openshellv1.PolicyNetworkEndpoint{{
+				Host:        endpoint.Host,
+				Port:        uint32(endpoint.Port), // #nosec G115 -- CRD validation limits the port to uint16 range.
+				Protocol:    protocol,
+				Enforcement: "enforce",
+			}},
+			Binaries: []openshellv1.PolicyNetworkBinary{{Path: "**"}},
+		}
+	}
+	return policy
 }
 
 type sandboxObservation struct {

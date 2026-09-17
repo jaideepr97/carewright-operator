@@ -1,0 +1,362 @@
+apiVersion: sonataflow.org/v1alpha08
+kind: SonataFlow
+metadata:
+  name: acpwriter
+  annotations:
+    sonataflow.org/profile: dev
+    sonataflow.org/description: "ACP Writer pipeline orchestration"
+    sonataflow.org/version: "0.3.0"
+spec:
+  podTemplate:
+    container:
+      env:
+        - name: PATIENT_DATA_URL
+          value: "http://acp-patient-data:8080"
+        - name: LLM_REASONING_URL
+          value: "http://acp-llm-reasoning:8080"
+        - name: DECISION_ENGINE_URL
+          value: "http://acp-decision-engine:8080"
+        - name: FHIR_GENERATION_URL
+          value: "http://acp-fhir-generation:8080"
+        - name: FHIR_SERVER_URL
+          value: "http://acp-fhir-server:8080"
+  flow:
+    start: ScanPatient
+    events:
+      - name: scanDone
+        source: ""
+        type: scan-done
+      - name: resolveDone
+        source: ""
+        type: resolve-done
+      - name: executeDmnDone
+        source: ""
+        type: execute-dmn-done
+      - name: retrieveDone
+        source: ""
+        type: retrieve-done
+      - name: composeDone
+        source: ""
+        type: compose-done
+      - name: generateDone
+        source: ""
+        type: generate-done
+      - name: reviewDone
+        source: ""
+        type: review-done
+      - name: careplanReviewed
+        source: ""
+        type: careplan-reviewed
+    functions:
+      # Async functions (callback pattern, <10s each but tracked independently)
+      - name: scanpatientasync
+        type: custom
+        operation: rest:post:http://acp-patient-data:8080/api/v1/scan-async
+      - name: resolveguidelinesasync
+        type: custom
+        operation: rest:post:http://acp-llm-reasoning:8080/api/v1/resolve-async
+      - name: executedmnasync
+        type: custom
+        operation: rest:post:http://acp-llm-reasoning:8080/api/v1/execute-dmn-async
+      - name: retrieverecommendationsasync
+        type: custom
+        operation: rest:post:http://acp-llm-reasoning:8080/api/v1/retrieve-async
+      - name: writefhir
+        type: custom
+        operation: rest:post:http://acp-fhir-server:8080/api/v1/write
+      - name: notifybffreview
+        type: custom
+        operation: rest:post:http://acp-bff:8080/api/v1/notify-review
+      # Async functions (LLM-heavy, 30-120s)
+      - name: composeplanasynch
+        type: custom
+        operation: rest:post:http://acp-llm-reasoning:8080/api/v1/compose-async
+      - name: generatebundleasync
+        type: custom
+        operation: rest:post:http://acp-fhir-generation:8080/api/v1/generate-bundle-async
+      - name: reviewfhirasync
+        type: custom
+        operation: rest:post:http://acp-llm-reasoning:8080/api/v1/review-fhir-async
+    states:
+      # --- Phase 1: Data collection (async callbacks for step tracking) ---
+
+      - name: ScanPatient
+        type: callback
+        action:
+          functionRef:
+            refName: scanpatientasync
+            arguments:
+              callback_url: "http://acpwriter:80/wait-scan"
+              process_instance_id: "$WORKFLOW.instanceId"
+              ips_ref: "${ .ips_ref }"
+        eventRef: scanDone
+        eventDataFilter:
+          toStateData: "${ .patientData }"
+        transition: ResolveGuidelines
+
+      - name: ResolveGuidelines
+        type: callback
+        action:
+          functionRef:
+            refName: resolveguidelinesasync
+            arguments:
+              callback_url: "http://acpwriter:80/wait-resolve"
+              process_instance_id: "$WORKFLOW.instanceId"
+              condition_codes: "${ .patientData.condition_codes }"
+        eventRef: resolveDone
+        eventDataFilter:
+          toStateData: "${ .guidelineData }"
+        transition: ExecuteDMN
+
+      - name: ExecuteDMN
+        type: callback
+        action:
+          functionRef:
+            refName: executedmnasync
+            arguments:
+              callback_url: "http://acpwriter:80/wait-execute-dmn"
+              process_instance_id: "$WORKFLOW.instanceId"
+              ips_bundle_ref: "${ .patientData.ips_bundle_ref }"
+              applicable_dmn_models: "${ .guidelineData.applicable_dmn_models }"
+              dmn_dependency_graph: "${ .guidelineData.dmn_dependency_graph }"
+        eventRef: executeDmnDone
+        eventDataFilter:
+          toStateData: "${ .dmnData }"
+        transition: RetrieveRecommendations
+
+      - name: RetrieveRecommendations
+        type: callback
+        action:
+          functionRef:
+            refName: retrieverecommendationsasync
+            arguments:
+              callback_url: "http://acpwriter:80/wait-retrieve"
+              process_instance_id: "$WORKFLOW.instanceId"
+              condition_codes: "${ .patientData.condition_codes }"
+              dmn_results: "${ .dmnData.dmn_results }"
+              applicable_cpgs: "${ .guidelineData.applicable_cpgs }"
+        eventRef: retrieveDone
+        eventDataFilter:
+          toStateData: "${ .recData }"
+        transition: ComposePlan
+
+      # --- Phase 2: LLM composition (async callbacks) ---
+
+      - name: ComposePlan
+        type: callback
+        action:
+          functionRef:
+            refName: composeplanasynch
+            arguments:
+              callback_url: "http://acpwriter:80/wait-compose"
+              process_instance_id: "$WORKFLOW.instanceId"
+              patient_reference: "${ .patientData.patient_reference }"
+              patient_demographics: "${ .patientData.patient_demographics }"
+              condition_codes: "${ .patientData.condition_codes }"
+              medication_codes: "${ .patientData.medication_codes }"
+              allergy_codes: "${ .patientData.allergy_codes }"
+              dmn_results: "${ .dmnData.dmn_results }"
+              recommendations_ref: "${ .recData.recommendations_ref }"
+              applicable_cpgs: "${ .guidelineData.applicable_cpgs }"
+              # Clinician feedback from a prior care-plan review round. Empty on
+              # the first pass; on a request_changes loop it seeds the composer's
+              # reviewer feedback so goals/activities are actually revised.
+              careplan_feedback: '${ .careplanReview.comment // "" }'
+              # Ref to the PRIOR planning brief, so a request_changes recomposition
+              # can feed the previously-detected conflicts back to the composer
+              # (issue #169 F16a) — this is what makes "resolve all identified
+              # conflicts as you suggested" resolvable. Empty "" on the first pass
+              # (composerData is not set yet); llm_reasoning guards for that.
+              prior_brief_ref: '${ .composerData.planning_brief_ref // "" }'
+              # Full accumulated clinician review history, oldest-first (issue #169
+              # F17b). Each revision otherwise sees only the latest comment, so
+              # earlier instructions — including standing constraints ("never add
+              # X") — silently expire. Empty [] on the first pass.
+              careplan_review_history: '${ .careplanReviewHistory // [] }'
+        eventRef: composeDone
+        eventDataFilter:
+          toStateData: "${ .composerData }"
+        stateDataFilter:
+          output: "${ del(.ips_bundle) }"
+        transition: InitFHIRReview
+
+      - name: InitFHIRReview
+        type: inject
+        data:
+          fhirReviewCount: 0
+          maxFHIRReviews: 4
+          fhirReviewFeedback: ""
+        transition: GenerateBundle
+
+      # --- Phase 3: FHIR generation + review loop (async callbacks) ---
+
+      - name: GenerateBundle
+        type: callback
+        action:
+          functionRef:
+            refName: generatebundleasync
+            arguments:
+              callback_url: "http://acpwriter:80/wait-generate"
+              process_instance_id: "$WORKFLOW.instanceId"
+              planning_brief_ref: "${ .composerData.planning_brief_ref }"
+              # Rendered composer/conflict prompts captured by ComposePlan, so the
+              # deployed bundle carries AI-InputPrompt DocRefs like the monolith
+              # (issue #169 F2). Null when prompt capture is disabled.
+              prompts_ref: "${ .composerData.prompts_ref }"
+              patient_demographics: "${ .patientData.patient_demographics }"
+              fhir_review_feedback: "${ .fhirReviewFeedback }"
+        eventRef: generateDone
+        eventDataFilter:
+          toStateData: "${ .fhirGenData }"
+        transition: ReviewFHIR
+
+      - name: ReviewFHIR
+        type: callback
+        action:
+          functionRef:
+            refName: reviewfhirasync
+            arguments:
+              callback_url: "http://acpwriter:80/wait-review"
+              process_instance_id: "$WORKFLOW.instanceId"
+              fhir_bundle_ref: "${ .fhirGenData.fhir_bundle_ref }"
+              terminology_issues: "${ .fhirGenData.terminology_issues }"
+              syntax_errors: "${ .fhirGenData.syntax_errors }"
+              fhir_review_count: "${ .fhirReviewCount }"
+        eventRef: reviewDone
+        eventDataFilter:
+          toStateData: "${ .fhirReviewData }"
+        transition: IncrementFHIRReview
+
+      - name: IncrementFHIRReview
+        type: inject
+        data: {}
+        stateDataFilter:
+          output: "${ . + {fhirReviewCount: (.fhirReviewCount + 1), fhirReviewFeedback: .fhirReviewData.fhir_review_feedback} }"
+        transition: CheckFHIRVerdict
+
+      - name: CheckFHIRVerdict
+        type: switch
+        dataConditions:
+          - name: Approved
+            condition: '${ (.fhirReviewData.fhir_review_feedback == "") or (.fhirReviewData.fhir_review_feedback == null) }'
+            transition: InitCarePlanReview
+          - name: MaxReached
+            condition: "${ .fhirReviewCount >= .maxFHIRReviews }"
+            transition: InitCarePlanReview
+        defaultCondition:
+          transition: GenerateBundle
+
+      # --- Phase 4: Human review of care plan ---
+
+      - name: InitCarePlanReview
+        type: inject
+        # NOTE: inject `data` merges into state BEFORE stateDataFilter runs, so
+        # putting careplanReviewCount into `data` would clobber the incremented
+        # value back to 0 on every request_changes loop (the UI then shows
+        # "round 1" forever). Initialize only via the null-guarded filter.
+        data: {}
+        stateDataFilter:
+          output: "${ if .careplanReviewCount == null then . + {careplanReviewCount: 0} else . end }"
+        transition: ReviewCarePlan
+
+      - name: ReviewCarePlan
+        type: callback
+        timeouts:
+          eventTimeout: PT24H
+        action:
+          functionRef:
+            refName: notifybffreview
+            arguments:
+              process_instance_id: "$WORKFLOW.instanceId"
+              review_type: "careplan"
+              fhir_bundle_ref: "${ .fhirGenData.fhir_bundle_ref }"
+              planning_brief_ref: "${ .composerData.planning_brief_ref }"
+              review_iteration: "${ .careplanReviewCount }"
+              previous_feedback: "${ .careplanReview }"
+        eventRef: careplanReviewed
+        eventDataFilter:
+          toStateData: "${ .careplanReview }"
+        transition: ValidateReviewRound
+
+      # Round-binding guard (issue #169): the UI stamps each submission with the
+      # reviewRound it was showing (== careplanReviewCount at the armed gate). If
+      # a submission carries a round that no longer matches the gate's current
+      # round, the user reviewed a superseded plan version -- discard it and
+      # re-arm the gate so they review the real plan, rather than (e.g.) approving
+      # content they never saw. reviewRound == null is treated as valid for
+      # backward compatibility (old clients, manual curl events); that fail-open
+      # path is watched by verify-review-gate.sh.
+      - name: ValidateReviewRound
+        type: switch
+        dataConditions:
+          - name: staleRound
+            condition: "${ .careplanReview.reviewRound != null and .careplanReview.reviewRound != .careplanReviewCount }"
+            transition: DiscardStaleReview
+        defaultCondition:
+          transition: IncrementCarePlanReview
+
+      - name: DiscardStaleReview
+        type: inject
+        # data:{} + filter only -- never put loop-surviving data in an inject
+        # `data:` block (it merges BEFORE stateDataFilter and clobbers state;
+        # see the InitCarePlanReview note). Drop the stale review and re-arm the
+        # gate without touching careplanReviewCount or careplanReviewHistory.
+        data: {}
+        stateDataFilter:
+          output: "${ del(.careplanReview) }"
+        transition: ReviewCarePlan
+
+      - name: IncrementCarePlanReview
+        type: inject
+        data: {}
+        stateDataFilter:
+          # Bump the round counter AND append this round to the accumulated
+          # review history (issue #169 F17b), so a request_changes loop back to
+          # ComposePlan carries every prior comment, not just the latest.
+          output: "${ . + {careplanReviewCount: ((.careplanReviewCount // 0) + 1), careplanReviewHistory: ((.careplanReviewHistory // []) + [.careplanReview])} }"
+        transition: CheckCarePlanReview
+
+      - name: CheckCarePlanReview
+        type: switch
+        dataConditions:
+          - name: approved
+            condition: "${ .careplanReview.decision == \"approve\" }"
+            transition: WriteFHIR
+          - name: changesRequested
+            # Loop back to ComposePlan (not GenerateBundle): goals/activities are
+            # decided in the planning brief, so re-composing with the clinician's
+            # feedback is what actually revises the plan. GenerateBundle only
+            # serializes an existing brief and cannot change clinical content.
+            condition: "${ .careplanReview.decision == \"request_changes\" }"
+            transition: ComposePlan
+        # Fail closed: an unrecognized/missing decision must NOT auto-write the
+        # plan. Re-present the review gate instead of defaulting to WriteFHIR.
+        defaultCondition:
+          transition: ReviewCarePlan
+
+      # --- Phase 5: Write to FHIR server (sync) ---
+
+      - name: WriteFHIR
+        type: operation
+        actions:
+          - name: callWrite
+            functionRef:
+              refName: writefhir
+              arguments:
+                fhir_bundle_ref: "${ .fhirGenData.fhir_bundle_ref }"
+                patient_reference: "${ .patientData.patient_reference }"
+                # Approving clinician from the care-plan review gate. Null when
+                # the UI omits it; /api/v1/write then falls back to the config
+                # default reviewer. Threaded so the deployed approval records the
+                # verifier Humanagent + acknowledges conflicts (issue #169 F1).
+                reviewer: "${ .careplanReview.reviewer }"
+            actionDataFilter:
+              results: "${ . }"
+              toStateData: "${ .writeResult }"
+        transition: Done
+
+      - name: Done
+        type: inject
+        data:
+          status: "completed"
+        end: true

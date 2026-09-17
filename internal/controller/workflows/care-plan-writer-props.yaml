@@ -1,0 +1,41 @@
+---
+# SonataFlow user properties for the acpwriter workflow.
+#
+# REQUIRED for the workflow to function: maps each inbound CloudEvent channel
+# to an HTTP endpoint (quarkus-http connector) so async services can POST
+# completion events to the /wait-* paths, and raises the HTTP/REST-client
+# timeouts and body-size limits to accommodate long LLM calls and large
+# FHIR payloads. Without this ConfigMap the workflow stalls at its first
+# callback state.
+#
+# The SonataFlow operator mounts <workflow-name>-props as the workflow's
+# application.properties. Content mirrors the verified-working deployment.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acpwriter-props
+  labels:
+    app.kubernetes.io/part-of: cpg-to-acp
+data:
+  application.properties: |
+    quarkus.rest-client.connect-timeout=10000
+    quarkus.rest-client.read-timeout=600000
+    quarkus.http.read-timeout=600s
+    quarkus.http.idle-timeout=600s
+    quarkus.http.limits.max-body-size=50m
+    mp.messaging.incoming.scan-done.connector=quarkus-http
+    mp.messaging.incoming.scan-done.path=/wait-scan
+    mp.messaging.incoming.resolve-done.connector=quarkus-http
+    mp.messaging.incoming.resolve-done.path=/wait-resolve
+    mp.messaging.incoming.execute-dmn-done.connector=quarkus-http
+    mp.messaging.incoming.execute-dmn-done.path=/wait-execute-dmn
+    mp.messaging.incoming.retrieve-done.connector=quarkus-http
+    mp.messaging.incoming.retrieve-done.path=/wait-retrieve
+    mp.messaging.incoming.compose-done.connector=quarkus-http
+    mp.messaging.incoming.compose-done.path=/wait-compose
+    mp.messaging.incoming.generate-done.connector=quarkus-http
+    mp.messaging.incoming.generate-done.path=/wait-generate
+    mp.messaging.incoming.review-done.connector=quarkus-http
+    mp.messaging.incoming.review-done.path=/wait-review
+    mp.messaging.incoming.careplan-reviewed.connector=quarkus-http
+    mp.messaging.incoming.careplan-reviewed.path=/wait-careplan-review

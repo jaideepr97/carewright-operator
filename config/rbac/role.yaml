@@ -9,8 +9,12 @@ rules:
   resources:
   - configmaps
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - apps.cpgtoacp.io
@@ -44,3 +48,15 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - sonataflow.org
+  resources:
+  - sonataflows
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
