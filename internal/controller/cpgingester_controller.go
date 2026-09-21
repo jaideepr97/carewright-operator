@@ -21,6 +21,7 @@ import (
 	"maps"
 	"strconv"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -45,7 +46,9 @@ type CPGIngesterReconciler struct {
 // +kubebuilder:rbac:groups=apps.carewright.io,resources=cpgingesters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sonataflow.org,resources=sonataflows,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=aistor.min.io,resources=objectstores,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 
 // Reconcile creates and manages one SandboxRequest for each CPG Ingester component.
 func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -59,18 +62,14 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	knownEndpoints, err := componentServiceURLs(ctx, r.Client, &ingester)
+	artifactStore, err := reconcileArtifactStore(ctx, r.Client, &ingester, ingester.Spec.ArtifactStore)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	summary, err := reconcileComponentSandboxes(
-		ctx,
-		r.Client,
-		r.Scheme,
-		&ingester,
-		ingester.Spec.Sandbox,
-		cpgIngesterComponents(&ingester, knownEndpoints),
-	)
+	effective := ingester.DeepCopy()
+	effective.Spec.ArtifactStore = artifactStore.Spec
+
+	knownEndpoints, err := componentServiceURLs(ctx, r.Client, &ingester)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -84,7 +83,7 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			literals["http://acp-bff:8080"] = strings.TrimRight(writer.Status.Endpoints["bff"], "/")
 		}
 	}
-	workflow, err := reconcilePipelineWorkflow(ctx, r.Client, r.Scheme, &ingester, pipelineWorkflowTemplate{
+	template := pipelineWorkflowTemplate{
 		WorkflowYAML: cpgIngesterWorkflowYAML,
 		PropsYAML:    cpgIngesterPropsYAML,
 		Replacements: map[string]string{
@@ -95,7 +94,23 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			"http://cpg-ingester-bff:8080":          "bff",
 		},
 		LiteralReplacements: literals,
-	}, summary.Endpoints, summary.Desired)
+	}
+	components := cpgIngesterComponents(effective, knownEndpoints, workflowServiceURL(&ingester))
+	workflow, err := reconcilePipelineWorkflow(ctx, r.Client, r.Scheme, &ingester, template, knownEndpoints, len(components))
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !workflow.Ready {
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+	template.LiteralReplacements[templateWorkflowURL(template.WorkflowYAML)] = strings.TrimRight(workflow.URL, "/")
+	components = cpgIngesterComponents(effective, knownEndpoints, workflow.URL)
+
+	summary, err := reconcileComponentSandboxes(ctx, r.Client, r.Scheme, &ingester, ingester.Spec.Sandbox, workflow.URL, components)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	workflow, err = reconcilePipelineWorkflow(ctx, r.Client, r.Scheme, &ingester, template, summary.Endpoints, summary.Desired)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -103,6 +118,9 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	before := ingester.DeepCopy()
 	ingester.Status.ObservedGeneration = ingester.Generation
 	ingester.Status.Endpoints = maps.Clone(summary.Endpoints)
+	if artifactStore.URL != "" {
+		ingester.Status.Endpoints["artifactStore"] = artifactStore.URL
+	}
 	if workflow.Created {
 		ingester.Status.Endpoints["workflow"] = workflow.URL
 	}
@@ -134,10 +152,12 @@ func (r *CPGIngesterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func cpgIngesterComponents(ingester *appsv1alpha1.CPGIngester, endpoints map[string]string) []sandboxComponent {
+func cpgIngesterComponents(ingester *appsv1alpha1.CPGIngester, endpoints map[string]string, workflowURL string) []sandboxComponent {
 	artifactEnv, artifactProvider := artifactStoreInputs(ingester.Spec.ArtifactStore)
+	artifactAccess := networkAccessForURL("artifact-store", artifactEnv["ARTIFACT_STORE_URL"])
 	observabilityEnv := observabilityInputs(ingester.Spec.Observability)
 	llmEnv, llmProvider := llmInputs(ingester.Spec.LLM)
+	inferenceAccess := networkAccessForURL("inference", llmEnv["LITELLM_URL"])
 
 	ingestionEnv := mergedEnv(artifactEnv, observabilityEnv)
 	setIfNotEmpty(ingestionEnv, "LOG_LEVEL", ingester.Spec.Ingestion.LogLevel)
@@ -161,7 +181,7 @@ func cpgIngesterComponents(ingester *appsv1alpha1.CPGIngester, endpoints map[str
 		return env
 	}
 	bffEnv := pythonEnv(ingester.Spec.BFF)
-	bffEnv["SONATAFLOW_URL"] = workflowServiceURL(ingester)
+	bffEnv["SONATAFLOW_URL"] = strings.TrimRight(workflowURL, "/")
 	if ingester.Spec.ArtifactStore != nil {
 		setIfNotEmpty(bffEnv, "MINIO_ENDPOINT", ingester.Spec.ArtifactStore.URL)
 	}
@@ -169,11 +189,11 @@ func cpgIngesterComponents(ingester *appsv1alpha1.CPGIngester, endpoints map[str
 	setIfNotEmpty(uiEnv, "BFF_HOST", endpointHost(endpoints["bff"]))
 
 	return []sandboxComponent{
-		{Name: "ingestion", Port: 8080, Spec: ingester.Spec.Ingestion.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.ingestion:app", "8080"), Env: ingestionEnv, Providers: []string{artifactProvider}},
-		{Name: "llm-analysis", Port: 8080, Spec: ingester.Spec.LLMAnalysis.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.llm_analysis:app", "8080"), Env: analysisEnv, Providers: []string{artifactProvider, llmProvider}},
-		{Name: "assembly", Port: 8080, Spec: ingester.Spec.Assembly.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.assembly_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Assembly), Providers: []string{artifactProvider}},
-		{Name: "delivery", Port: 8080, Spec: ingester.Spec.Delivery.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.delivery_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Delivery), Providers: []string{artifactProvider}},
-		{Name: "bff", Port: 8080, Spec: ingester.Spec.BFF.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.bff:app", "8080"), Env: bffEnv, Providers: []string{artifactProvider}},
+		{Name: "ingestion", Port: 8080, Spec: ingester.Spec.Ingestion.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.ingestion:app", "8080"), Env: ingestionEnv, Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
+		{Name: "llm-analysis", Port: 8080, Spec: ingester.Spec.LLMAnalysis.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.llm_analysis:app", "8080"), Env: analysisEnv, Providers: []string{artifactProvider, llmProvider}, NetworkAccess: combinedNetworkAccess(artifactAccess, inferenceAccess)},
+		{Name: "assembly", Port: 8080, Spec: ingester.Spec.Assembly.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.assembly_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Assembly), Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
+		{Name: "delivery", Port: 8080, Spec: ingester.Spec.Delivery.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.delivery_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Delivery), Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
+		{Name: "bff", Port: 8080, Spec: ingester.Spec.BFF.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.bff:app", "8080"), Env: bffEnv, Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
 		{Name: "ui", Port: 8080, Spec: ingester.Spec.UI, Command: []string{"/usr/libexec/s2i/run"}, Env: uiEnv},
 	}
 }

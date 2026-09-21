@@ -99,6 +99,32 @@ var _ = Describe("CPGIngester Controller", func() {
 		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
 		Expect(err).NotTo(HaveOccurred())
 
+		bootstrapWorkflow := sonataFlowObject()
+		workflowKey := types.NamespacedName{Name: workflowResourceName(resource), Namespace: "default"}
+		Expect(workflowKey.Name).NotTo(ContainSubstring("-"))
+		Expect(k8sClient.Get(ctx, workflowKey, bootstrapWorkflow)).To(Succeed())
+		bootstrapWorkflow.Object["status"] = map[string]any{
+			"observedGeneration": bootstrapWorkflow.GetGeneration(),
+			"address":            map[string]any{"url": "https://workflow.gateway.test/callback"},
+			"conditions": []any{map[string]any{
+				"type": "Running", "status": "True",
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, bootstrapWorkflow)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, workflowKey, bootstrapWorkflow)).To(Succeed())
+		bootstrapWorkflow.Object["status"] = map[string]any{
+			"observedGeneration": bootstrapWorkflow.GetGeneration(),
+			"address":            map[string]any{"url": "https://workflow.gateway.test/callback"},
+			"conditions": []any{map[string]any{
+				"type": "Running", "status": "True",
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, bootstrapWorkflow)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
+
 		var requests appsv1alpha1.SandboxRequestList
 		Expect(k8sClient.List(ctx, &requests, client.InNamespace("default"), client.MatchingLabels{pipelineLabel: string(resource.UID)})).To(Succeed())
 		Expect(requests.Items).To(HaveLen(6))
@@ -114,9 +140,10 @@ var _ = Describe("CPGIngester Controller", func() {
 		Expect(assembly.Spec.PolicyRef.Name).To(Equal("assembly-policy"))
 		Expect(assembly.Spec.Resources.Memory).To(Equal("512Mi"))
 		Expect(assembly.Spec.Services).To(Equal([]appsv1alpha1.SandboxServiceSpec{{Name: "http", TargetPort: 8080}}))
-		Expect(assembly.Spec.NetworkAccess).To(ConsistOf(appsv1alpha1.SandboxNetworkAccessSpec{
-			Name: "sonataflow", Host: workflowServiceHost(resource), Port: 80, Protocol: "rest",
-		}))
+		Expect(assembly.Spec.NetworkAccess).To(ConsistOf(
+			appsv1alpha1.SandboxNetworkAccessSpec{Name: "sonataflow", Host: "workflow.gateway.test", Port: 443, Protocol: "rest"},
+			appsv1alpha1.SandboxNetworkAccessSpec{Name: "artifact-store", Host: "minio.test", Port: 9000, Protocol: "rest"},
+		))
 		Expect(assembly.Spec.Providers).To(ConsistOf("minio-provider", "extra-provider"))
 		Expect(assembly.Spec.Env).To(HaveKeyWithValue("ARTIFACT_STORE_URL", "http://minio.test:9000"))
 		Expect(assembly.Spec.Env).To(HaveKeyWithValue("MLFLOW_TRACKING_URI", "http://mlflow.test:5000"))
@@ -129,9 +156,12 @@ var _ = Describe("CPGIngester Controller", func() {
 		Expect(analysis.Spec.Providers).To(ConsistOf("minio-provider", "llm-provider"))
 		Expect(analysis.Spec.Env).To(HaveKeyWithValue("LITELLM_URL", "http://litellm.test:4000"))
 		Expect(analysis.Spec.Env).To(HaveKeyWithValue("FIGURE_INTERPRETATION_MAX_FIGURES", "12"))
+		Expect(analysis.Spec.NetworkAccess).To(ContainElement(appsv1alpha1.SandboxNetworkAccessSpec{
+			Name: "inference", Host: "litellm.test", Port: 4000, Protocol: "rest",
+		}))
 		bff := &appsv1alpha1.SandboxRequest{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-bff", Namespace: "default"}, bff)).To(Succeed())
-		Expect(bff.Spec.Env).To(HaveKeyWithValue("SONATAFLOW_URL", workflowServiceURL(resource)))
+		Expect(bff.Spec.Env).To(HaveKeyWithValue("SONATAFLOW_URL", "https://workflow.gateway.test/callback"))
 
 		updated := &appsv1alpha1.CPGIngester{}
 		Expect(k8sClient.Get(ctx, resourceKey, updated)).To(Succeed())
@@ -153,12 +183,22 @@ var _ = Describe("CPGIngester Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		workflow := sonataFlowObject()
-		workflowKey := types.NamespacedName{Name: workflowResourceName(resource), Namespace: "default"}
+		Expect(k8sClient.Get(ctx, workflowKey, workflow)).To(Succeed())
+		workflow.Object["status"] = map[string]any{
+			"observedGeneration": workflow.GetGeneration(),
+			"address":            map[string]any{"url": "https://workflow.gateway.test/callback"},
+			"conditions": []any{map[string]any{
+				"type": "Running", "status": "True",
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, workflow)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sClient.Get(ctx, workflowKey, workflow)).To(Succeed())
 		workflowJSON, err := workflow.MarshalJSON()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(workflowJSON)).To(ContainSubstring("https://assembly.gateway.test/api/v1/assemble"))
-		Expect(string(workflowJSON)).To(ContainSubstring(workflowServiceURL(resource) + "/wait-parse"))
+		Expect(string(workflowJSON)).To(ContainSubstring("https://workflow.gateway.test/callback/wait-parse"))
 		props := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: workflowResourceName(resource) + "-props", Namespace: "default"}, props)).To(Succeed())
 		Expect(props.Data["application.properties"]).To(ContainSubstring("mp.messaging.incoming.parse-done.path=/wait-parse"))
@@ -166,7 +206,7 @@ var _ = Describe("CPGIngester Controller", func() {
 		Expect(k8sClient.Get(ctx, resourceKey, updated)).To(Succeed())
 		Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, readyCondition)).To(BeFalse())
 		Expect(updated.Status.Endpoints).To(HaveKeyWithValue("assembly", "https://assembly.gateway.test"))
-		Expect(updated.Status.Endpoints).To(HaveKeyWithValue("workflow", workflowServiceURL(resource)))
+		Expect(updated.Status.Endpoints).To(HaveKeyWithValue("workflow", "https://workflow.gateway.test/callback"))
 
 		Expect(k8sClient.List(ctx, &requests, client.InNamespace("default"), client.MatchingLabels{pipelineLabel: string(resource.UID)})).To(Succeed())
 		for index := range requests.Items {
@@ -179,7 +219,7 @@ var _ = Describe("CPGIngester Controller", func() {
 		}
 		workflow.Object["status"] = map[string]any{
 			"observedGeneration": workflow.GetGeneration(),
-			"address":            map[string]any{"url": "http://sonataflow-address.test"},
+			"address":            map[string]any{"url": "https://workflow.gateway.test/callback"},
 			"conditions": []any{map[string]any{
 				"type": "Running", "status": "True",
 			}},
@@ -189,7 +229,7 @@ var _ = Describe("CPGIngester Controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sClient.Get(ctx, resourceKey, updated)).To(Succeed())
 		Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, readyCondition)).To(BeTrue())
-		Expect(updated.Status.Endpoints).To(HaveKeyWithValue("workflow", "http://sonataflow-address.test"))
+		Expect(updated.Status.Endpoints).To(HaveKeyWithValue("workflow", "https://workflow.gateway.test/callback"))
 
 		updated.Spec.Assembly.Image = "example.invalid/assembly:v2"
 		Expect(k8sClient.Update(ctx, updated)).To(Succeed())

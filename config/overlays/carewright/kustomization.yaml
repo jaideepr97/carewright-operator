@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: carewright
+
+resources:
+  - ../../default
+
+images:
+  - name: controller
+    newName: quay.io/cpgtoacp/cpgtoacp-operator
+    newTag: dev-20260921-policyfix
+
+patches:
+  - path: manager_patch.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: controller-manager
+  - path: delete_namespace.yaml
+    target:
+      version: v1
+      kind: Namespace
+      name: system

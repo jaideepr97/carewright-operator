@@ -45,12 +45,13 @@ const (
 )
 
 type sandboxComponent struct {
-	Name      string
-	Port      int32
-	Spec      appsv1alpha1.ComponentSpec
-	Command   []string
-	Env       map[string]string
-	Providers []string
+	Name          string
+	Port          int32
+	Spec          appsv1alpha1.ComponentSpec
+	Command       []string
+	Env           map[string]string
+	Providers     []string
+	NetworkAccess []appsv1alpha1.SandboxNetworkAccessSpec
 }
 
 type sandboxSummary struct {
@@ -65,11 +66,15 @@ func reconcileComponentSandboxes(
 	scheme *runtime.Scheme,
 	owner client.Object,
 	config appsv1alpha1.PipelineSandboxSpec,
+	workflowURL string,
 	components []sandboxComponent,
 ) (sandboxSummary, error) {
 	desired := make(map[string]struct{}, len(components))
 	summary := sandboxSummary{Desired: len(components), Endpoints: map[string]string{}}
-	workflowHost := workflowServiceHost(owner)
+	workflowAccess := networkAccessForURL("sonataflow", workflowURL)
+	if len(workflowAccess) == 0 {
+		workflowAccess = networkAccessForURL("sonataflow", workflowServiceURL(owner))
+	}
 
 	for _, component := range components {
 		requestName := componentRequestName(owner.GetName(), component.Name)
@@ -90,6 +95,8 @@ func reconcileComponentSandboxes(
 				command = component.Spec.Command
 			}
 			providers := append(slices.Clone(component.Providers), component.Spec.ExtraProviders...)
+			networkAccess := slices.Clone(workflowAccess)
+			networkAccess = append(networkAccess, component.NetworkAccess...)
 			request.Spec = appsv1alpha1.SandboxRequestSpec{
 				SandboxName: componentSandboxName(owner.GetName(), component.Name),
 				Gateway:     config.Gateway,
@@ -104,9 +111,7 @@ func reconcileComponentSandboxes(
 					Name:       "http",
 					TargetPort: component.Port,
 				}},
-				NetworkAccess: []appsv1alpha1.SandboxNetworkAccessSpec{{
-					Name: "sonataflow", Host: workflowHost, Port: 80, Protocol: "rest",
-				}},
+				NetworkAccess: networkAccess,
 				Labels: map[string]string{
 					"app.kubernetes.io/component":  component.Name,
 					"app.kubernetes.io/instance":   safeLabelValue(owner.GetName()),
@@ -184,6 +189,36 @@ func endpointHost(endpoint string) string {
 		return parsed.Host
 	}
 	return strings.TrimRight(endpoint, "/")
+}
+
+func networkAccessForURL(name, endpoint string) []appsv1alpha1.SandboxNetworkAccessSpec {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Hostname() == "" {
+		return nil
+	}
+	port := int32(80)
+	protocol := "rest"
+	if parsed.Scheme == "https" {
+		port = 443
+	}
+	if parsed.Port() != "" {
+		parsedPort, err := strconv.ParseInt(parsed.Port(), 10, 32)
+		if err != nil || parsedPort < 1 || parsedPort > 65535 {
+			return nil
+		}
+		port = int32(parsedPort)
+	}
+	return []appsv1alpha1.SandboxNetworkAccessSpec{{
+		Name: name, Host: parsed.Hostname(), Port: port, Protocol: protocol,
+	}}
+}
+
+func combinedNetworkAccess(groups ...[]appsv1alpha1.SandboxNetworkAccessSpec) []appsv1alpha1.SandboxNetworkAccessSpec {
+	var result []appsv1alpha1.SandboxNetworkAccessSpec
+	for _, group := range groups {
+		result = append(result, group...)
+	}
+	return result
 }
 
 func componentRequestName(ownerName, component string) string {

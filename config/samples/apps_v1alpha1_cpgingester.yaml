@@ -12,7 +12,11 @@ spec:
       insecure: true
     workspace: default
   artifactStore:
-    url: http://minio:9000
+    managed:
+      name: carewright-artifacts
+      storageSize: 5Gi
+      servers: 1
+      volumesPerServer: 1
     artifactBucket: cpg-artifacts
     credentialsProvider: minio-credentials
   observability:

@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -76,7 +77,40 @@ type PythonComponentSpec struct {
 	PythonPath string `json:"pythonPath,omitempty"`
 }
 
+// ManagedObjectStoreSpec requests a MinIO ObjectStore from the installed
+// aistor.min.io operator. Omit this field when URL selects external storage.
+type ManagedObjectStoreSpec struct {
+	// Name is the ObjectStore resource name. It defaults to <pipeline>-artifacts.
+	// Pipelines may use the same name to share one namespace-local object store.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// StorageSize is the requested capacity of each persistent volume.
+	// +kubebuilder:default="5Gi"
+	// +optional
+	StorageSize resource.Quantity `json:"storageSize,omitempty"`
+
+	// StorageClassName selects the Kubernetes storage class. The cluster default
+	// is used when this field is empty.
+	// +optional
+	StorageClassName string `json:"storageClassName,omitempty"`
+
+	// Servers is the number of MinIO servers. One creates a development store;
+	// production distributed stores should use four or more.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Servers int32 `json:"servers,omitempty"`
+
+	// VolumesPerServer is the number of persistent volumes attached per server.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	VolumesPerServer int32 `json:"volumesPerServer,omitempty"`
+}
+
 // ArtifactStoreSpec configures the object store shared by pipeline components.
+// +kubebuilder:validation:XValidation:rule="!(has(self.url) && has(self.managed))",message="url and managed are mutually exclusive"
 type ArtifactStoreSpec struct {
 	// URL is the artifact store endpoint.
 	// +optional
@@ -95,6 +129,11 @@ type ArtifactStoreSpec struct {
 	// ARTIFACT_STORE_ACCESS_KEY and ARTIFACT_STORE_SECRET_KEY.
 	// +optional
 	CredentialsProvider string `json:"credentialsProvider,omitempty"`
+
+	// Managed requests a MinIO ObjectStore from the installed MinIO operator.
+	// The controller publishes its generated in-cluster endpoint to components.
+	// +optional
+	Managed *ManagedObjectStoreSpec `json:"managed,omitempty"`
 }
 
 // ObservabilitySpec configures tracing shared by pipeline components.

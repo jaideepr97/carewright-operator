@@ -311,13 +311,13 @@ network_policies:
 
 	It("merges first-class network access into a sandbox policy", func() {
 		policy := mergeNetworkAccess(nil, []appsv1alpha1.SandboxNetworkAccessSpec{{
-			Name: "sonataflow", Host: "pipeline.default.svc.cluster.local", Port: 80,
+			Name: "sonataflow", Host: "pipeline.default.svc.cluster.local", Port: 443, Protocol: "https",
 		}})
 		Expect(policy.Version).To(Equal(uint32(1)))
 		Expect(policy.NetworkPolicies).To(HaveKey("sonataflow"))
 		rule := policy.NetworkPolicies["sonataflow"]
 		Expect(rule.Endpoints).To(ConsistOf(openshellv1.PolicyNetworkEndpoint{
-			Host: "pipeline.default.svc.cluster.local", Port: 80, Protocol: "rest", Enforcement: "enforce",
+			Host: "pipeline.default.svc.cluster.local", Port: 443, Protocol: "rest", Enforcement: "enforce", Access: "full",
 		}))
 		Expect(rule.Binaries).To(ConsistOf(openshellv1.PolicyNetworkBinary{Path: "**"}))
 	})

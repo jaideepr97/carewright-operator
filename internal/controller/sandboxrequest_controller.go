@@ -531,7 +531,7 @@ func mergeNetworkAccess(policy *openshellv1.SandboxPolicy, access []appsv1alpha1
 	}
 	for _, endpoint := range access {
 		protocol := endpoint.Protocol
-		if protocol == "" {
+		if protocol == "" || protocol == "http" || protocol == "https" {
 			protocol = "rest"
 		}
 		policy.NetworkPolicies[endpoint.Name] = openshellv1.NetworkPolicyRule{
@@ -541,6 +541,7 @@ func mergeNetworkAccess(policy *openshellv1.SandboxPolicy, access []appsv1alpha1
 				Port:        uint32(endpoint.Port), // #nosec G115 -- CRD validation limits the port to uint16 range.
 				Protocol:    protocol,
 				Enforcement: "enforce",
+				Access:      "full",
 			}},
 			Binaries: []openshellv1.PolicyNetworkBinary{{Path: "**"}},
 		}

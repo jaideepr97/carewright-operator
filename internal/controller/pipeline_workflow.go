@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -58,10 +59,11 @@ type pipelineWorkflowTemplate struct {
 }
 
 type workflowSummary struct {
-	Created bool
-	Ready   bool
-	Name    string
-	URL     string
+	Created    bool
+	Configured bool
+	Ready      bool
+	Name       string
+	URL        string
 }
 
 func reconcilePipelineWorkflow(
@@ -74,20 +76,32 @@ func reconcilePipelineWorkflow(
 	desiredEndpointCount int,
 ) (workflowSummary, error) {
 	name := workflowResourceName(owner)
-	summary := workflowSummary{Name: name}
-	if len(endpoints) != desiredEndpointCount {
-		return summary, nil
+	summary := workflowSummary{Name: name, Configured: len(endpoints) == desiredEndpointCount}
+	workflow := sonataFlowObject()
+	workflow.SetName(name)
+	workflow.SetNamespace(owner.GetNamespace())
+	callbackURL := workflowServiceURL(owner)
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: owner.GetNamespace()}, workflow); err == nil {
+		if publishedURL, _, _ := unstructured.NestedString(workflow.Object, "status", "address", "url"); publishedURL != "" {
+			callbackURL = publishedURL
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return summary, fmt.Errorf("get SonataFlow %s: %w", name, err)
 	}
 
 	replacements := maps.Clone(template.Replacements)
 	for placeholder, component := range replacements {
 		endpoint := endpoints[component]
 		if endpoint == "" {
-			return summary, fmt.Errorf("component %q has no gateway service URL", component)
+			// Keep the stable in-cluster placeholder until OpenShell publishes
+			// this component's gateway URL. The early bootstrap workflow gives
+			// its callback Service a DNS address before sandbox policy resolution.
+			delete(replacements, placeholder)
+			continue
 		}
 		replacements[placeholder] = strings.TrimRight(endpoint, "/")
 	}
-	replacements[templateWorkflowURL(template.WorkflowYAML)] = workflowServiceURL(owner)
+	replacements[templateWorkflowURL(template.WorkflowYAML)] = strings.TrimRight(callbackURL, "/")
 	for placeholder, replacement := range template.LiteralReplacements {
 		replacements[placeholder] = replacement
 	}
@@ -103,9 +117,6 @@ func reconcilePipelineWorkflow(
 	desired.SetName(name)
 	desired.SetNamespace(owner.GetNamespace())
 	desired.SetGroupVersionKind(sonataFlowGVK)
-	workflow := sonataFlowObject()
-	workflow.SetName(name)
-	workflow.SetNamespace(owner.GetNamespace())
 	_, err = controllerutil.CreateOrUpdate(ctx, k8sClient, workflow, func() error {
 		workflow.SetLabels(mergedStringMap(workflow.GetLabels(), desired.GetLabels(), map[string]string{
 			managedByLabel: managedByValue,
@@ -119,7 +130,7 @@ func reconcilePipelineWorkflow(
 		return summary, fmt.Errorf("reconcile SonataFlow %s: %w", name, err)
 	}
 
-	if err := reconcileWorkflowProperties(ctx, k8sClient, scheme, owner, name, template.PropsYAML); err != nil {
+	if err := reconcileWorkflowProperties(ctx, k8sClient, owner, name, template.PropsYAML); err != nil {
 		return summary, err
 	}
 
@@ -132,7 +143,7 @@ func reconcilePipelineWorkflow(
 	return summary, nil
 }
 
-func reconcileWorkflowProperties(ctx context.Context, k8sClient client.Client, scheme *runtime.Scheme, owner client.Object, workflowName, data string) error {
+func reconcileWorkflowProperties(ctx context.Context, k8sClient client.Client, owner client.Object, workflowName, data string) error {
 	var desired corev1.ConfigMap
 	if err := yaml.Unmarshal([]byte(data), &desired); err != nil {
 		return fmt.Errorf("decode SonataFlow properties: %w", err)
@@ -144,7 +155,18 @@ func reconcileWorkflowProperties(ctx context.Context, k8sClient client.Client, s
 			pipelineLabel:  string(owner.GetUID()),
 		})
 		properties.Data = maps.Clone(desired.Data)
-		return controllerutil.SetControllerReference(owner, properties, scheme)
+		// SonataFlow adopts this conventionally named ConfigMap and must be its
+		// controller owner. Keep CareWright's labels, but relinquish any legacy
+		// pipeline controller reference so the SonataFlow operator can adopt it.
+		ownerReferences := properties.GetOwnerReferences()
+		filtered := ownerReferences[:0]
+		for _, reference := range ownerReferences {
+			if reference.UID != owner.GetUID() {
+				filtered = append(filtered, reference)
+			}
+		}
+		properties.SetOwnerReferences(filtered)
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("reconcile SonataFlow properties %s: %w", properties.Name, err)
@@ -171,10 +193,6 @@ func sonataFlowObject() *unstructured.Unstructured {
 }
 
 func sonataFlowReady(workflow *unstructured.Unstructured) bool {
-	observed, _, _ := unstructured.NestedInt64(workflow.Object, "status", "observedGeneration")
-	if observed != workflow.GetGeneration() {
-		return false
-	}
 	conditions, _, _ := unstructured.NestedSlice(workflow.Object, "status", "conditions")
 	for _, item := range conditions {
 		condition, ok := item.(map[string]any)
@@ -186,15 +204,21 @@ func sonataFlowReady(workflow *unstructured.Unstructured) bool {
 }
 
 func workflowResourceName(owner client.Object) string {
-	candidate := owner.GetName() + "-workflow"
-	// Reserve room for the required <workflow-name>-props ConfigMap.
-	const maxNameLength = 57
+	// SonataFlow uses metadata.name as a generated Java type in dev mode, so
+	// Kubernetes-valid separators such as '-' and '.' cannot be retained.
+	var normalized strings.Builder
+	for _, character := range owner.GetName() {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			normalized.WriteRune(character)
+		}
+	}
+	candidate := "w" + normalized.String() + "workflow"
+	const maxNameLength = 63
 	if len(candidate) <= maxNameLength && len(validation.IsDNS1123Label(candidate)) == 0 {
 		return candidate
 	}
 	hash := shortHash(candidate)
-	prefix := strings.Trim(candidate[:maxNameLength-len(hash)-1], "-")
-	return prefix + "-" + hash
+	return candidate[:maxNameLength-len(hash)] + hash
 }
 
 func workflowServiceHost(owner client.Object) string {

@@ -98,6 +98,31 @@ var _ = Describe("CarePlanWriter Controller", func() {
 		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
 		Expect(err).NotTo(HaveOccurred())
 
+		bootstrapWorkflow := sonataFlowObject()
+		workflowKey := types.NamespacedName{Name: workflowResourceName(resource), Namespace: "default"}
+		Expect(k8sClient.Get(ctx, workflowKey, bootstrapWorkflow)).To(Succeed())
+		bootstrapWorkflow.Object["status"] = map[string]any{
+			"observedGeneration": bootstrapWorkflow.GetGeneration(),
+			"address":            map[string]any{"url": "https://writer-workflow.gateway.test"},
+			"conditions": []any{map[string]any{
+				"type": "Running", "status": "True",
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, bootstrapWorkflow)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, workflowKey, bootstrapWorkflow)).To(Succeed())
+		bootstrapWorkflow.Object["status"] = map[string]any{
+			"observedGeneration": bootstrapWorkflow.GetGeneration(),
+			"address":            map[string]any{"url": "https://writer-workflow.gateway.test"},
+			"conditions": []any{map[string]any{
+				"type": "Running", "status": "True",
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, bootstrapWorkflow)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
+
 		var requests appsv1alpha1.SandboxRequestList
 		Expect(k8sClient.List(ctx, &requests, client.InNamespace("default"), client.MatchingLabels{pipelineLabel: string(resource.UID)})).To(Succeed())
 		Expect(requests.Items).To(HaveLen(9))
@@ -109,12 +134,21 @@ var _ = Describe("CarePlanWriter Controller", func() {
 		Expect(reasoning.Spec.Providers).To(ConsistOf("minio-provider", "llm-provider", "embedding-provider"))
 		Expect(reasoning.Spec.Env).To(HaveKeyWithValue("EMBEDDING_BASE_URL", "https://embedding.test"))
 		Expect(reasoning.Spec.Env).NotTo(HaveKey("DECISION_ENGINE_URL"))
+		Expect(reasoning.Spec.NetworkAccess).To(ConsistOf(
+			appsv1alpha1.SandboxNetworkAccessSpec{Name: "sonataflow", Host: "writer-workflow.gateway.test", Port: 443, Protocol: "rest"},
+			appsv1alpha1.SandboxNetworkAccessSpec{Name: "artifact-store", Host: "minio.test", Port: 9000, Protocol: "rest"},
+			appsv1alpha1.SandboxNetworkAccessSpec{Name: "inference", Host: "litellm.test", Port: 4000, Protocol: "rest"},
+			appsv1alpha1.SandboxNetworkAccessSpec{Name: "embedding", Host: "embedding.test", Port: 443, Protocol: "rest"},
+		))
 
 		fhir := &appsv1alpha1.SandboxRequest{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-fhir-server", Namespace: "default"}, fhir)).To(Succeed())
 		Expect(fhir.Spec.Providers).To(ConsistOf("minio-provider", "fhir-provider"))
 		Expect(fhir.Spec.Env).To(HaveKeyWithValue("FHIR_SERVER_URL", "https://fhir.test/R4"))
 		Expect(fhir.Spec.Env).To(HaveKeyWithValue("ACP_REVIEWER_DISPLAY", "Clinician"))
+		Expect(fhir.Spec.NetworkAccess).To(ContainElement(appsv1alpha1.SandboxNetworkAccessSpec{
+			Name: "fhir-target", Host: "fhir.test", Port: 443, Protocol: "rest",
+		}))
 
 		decisionService := &appsv1alpha1.SandboxRequest{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-decision-service", Namespace: "default"}, decisionService)).To(Succeed())
@@ -142,16 +176,29 @@ var _ = Describe("CarePlanWriter Controller", func() {
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
 		Expect(err).NotTo(HaveOccurred())
 
+		workflow := sonataFlowObject()
+		workflowKey = types.NamespacedName{Name: workflowResourceName(resource), Namespace: "default"}
+		Expect(k8sClient.Get(ctx, workflowKey, workflow)).To(Succeed())
+		workflow.Object["status"] = map[string]any{
+			"observedGeneration": workflow.GetGeneration(),
+			"address":            map[string]any{"url": "https://writer-workflow.gateway.test"},
+			"conditions": []any{map[string]any{
+				"type": "Running", "status": "True",
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, workflow)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: resourceKey})
+		Expect(err).NotTo(HaveOccurred())
+
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-llm-reasoning", Namespace: "default"}, reasoning)).To(Succeed())
 		Expect(reasoning.Spec.Env).To(HaveKeyWithValue("DECISION_ENGINE_URL", "https://decision-engine.gateway.test"))
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-bff", Namespace: "default"}, &appsv1alpha1.SandboxRequest{})).To(Succeed())
 
-		workflow := sonataFlowObject()
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: workflowResourceName(resource), Namespace: "default"}, workflow)).To(Succeed())
+		Expect(k8sClient.Get(ctx, workflowKey, workflow)).To(Succeed())
 		workflowJSON, err := workflow.MarshalJSON()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(workflowJSON)).To(ContainSubstring("https://patient-data.gateway.test/api/v1/scan-async"))
-		Expect(string(workflowJSON)).To(ContainSubstring(workflowServiceURL(resource) + "/wait-review"))
+		Expect(string(workflowJSON)).To(ContainSubstring("https://writer-workflow.gateway.test/wait-review"))
 		props := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: workflowResourceName(resource) + "-props", Namespace: "default"}, props)).To(Succeed())
 		Expect(props.Data["application.properties"]).To(ContainSubstring("mp.messaging.incoming.careplan-reviewed.path=/wait-careplan-review"))
