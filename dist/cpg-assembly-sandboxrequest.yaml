@@ -1,4 +1,4 @@
-apiVersion: apps.cpgtoacp.io/v1alpha1
+apiVersion: apps.carewright.io/v1alpha1
 kind: SandboxRequest
 metadata:
   name: cpg-assembly
@@ -11,7 +11,7 @@ spec:
   gateway:
     endpoint: http://openshell.openshell.svc.cluster.local:8080
     insecure: true
-  image: quay.io/cpgtoacp/cpg-ingester-assembly:d7a4b92
+  image: quay.io/carewright/cpg-ingester-assembly:d7a4b92
   command:
     - uvicorn
     - cpg_ingester.services.assembly_svc:app

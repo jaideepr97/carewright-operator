@@ -30,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
+	appsv1alpha1 "carewright.io/carewright-operator/api/v1alpha1"
 )
 
 type fakeOpenShellClientFactory struct {
@@ -138,7 +138,7 @@ filesystem_policy:
 			Spec: appsv1alpha1.SandboxRequestSpec{
 				Gateway:   gateway,
 				Workspace: "pipelines",
-				Image:     "quay.io/cpgtoacp/component:test",
+				Image:     "quay.io/carewright/component:test",
 				Command:   []string{"python", "-m", "component"},
 				PolicyRef: &corev1.ConfigMapKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: policyName},
@@ -182,7 +182,7 @@ filesystem_policy:
 
 		sandbox, err := sdkClient.Sandboxes().Get(ctx, "pipelines", resourceName)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(sandbox.Spec.Template.Image).To(Equal("quay.io/cpgtoacp/component:test"))
+		Expect(sandbox.Spec.Template.Image).To(Equal("quay.io/carewright/component:test"))
 		Expect(sandbox.Spec.Template.Resources).To(Equal(map[string]any{
 			"limits": map[string]any{"cpu": "500m", "memory": "512Mi"},
 		}))
@@ -193,7 +193,7 @@ filesystem_policy:
 		Expect(sandbox.Spec.Policy.Filesystem.ReadOnly).To(Equal([]string{"/usr"}))
 		Expect(sandbox.Spec.Policy.Filesystem.ReadWrite).To(Equal([]string{"/sandbox"}))
 		Expect(sandbox.Labels).To(HaveKeyWithValue("app.kubernetes.io/component", "worker"))
-		Expect(sandbox.Labels["cpgtoacp.io/spec-hash"]).To(HaveLen(63))
+		Expect(sandbox.Labels["carewright.io/spec-hash"]).To(HaveLen(63))
 
 		Expect(k8sClient.Get(ctx, key, request)).To(Succeed())
 		Expect(request.Status.SandboxName).To(Equal(resourceName))

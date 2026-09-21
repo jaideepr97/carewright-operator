@@ -2,9 +2,9 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/apps.cpgtoacp.io_cpgingesters.yaml
-- bases/apps.cpgtoacp.io_careplanwriters.yaml
-- bases/apps.cpgtoacp.io_sandboxrequests.yaml
+- bases/apps.carewright.io_cpgingesters.yaml
+- bases/apps.carewright.io_careplanwriters.yaml
+- bases/apps.carewright.io_sandboxrequests.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

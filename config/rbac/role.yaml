@@ -17,7 +17,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - apps.cpgtoacp.io
+  - apps.carewright.io
   resources:
   - careplanwriters
   - cpgingesters
@@ -31,7 +31,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - apps.cpgtoacp.io
+  - apps.carewright.io
   resources:
   - careplanwriters/finalizers
   - cpgingesters/finalizers
@@ -39,7 +39,7 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - apps.cpgtoacp.io
+  - apps.carewright.io
   resources:
   - careplanwriters/status
   - cpgingesters/status

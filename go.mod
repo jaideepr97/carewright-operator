@@ -1,4 +1,4 @@
-module cpgtoacp.io/cpgtoacp-operator
+module carewright.io/carewright-operator
 
 go 1.25.0
 

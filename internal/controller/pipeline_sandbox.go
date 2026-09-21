@@ -34,13 +34,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
+	appsv1alpha1 "carewright.io/carewright-operator/api/v1alpha1"
 )
 
 const (
-	managedByLabel = "apps.cpgtoacp.io/managed-by"
-	pipelineLabel  = "apps.cpgtoacp.io/pipeline-uid"
-	componentLabel = "apps.cpgtoacp.io/component"
+	managedByLabel = "apps.carewright.io/managed-by"
+	pipelineLabel  = "apps.carewright.io/pipeline-uid"
+	componentLabel = "apps.carewright.io/component"
 	managedByValue = "pipeline-controller"
 )
 
@@ -110,7 +110,7 @@ func reconcileComponentSandboxes(
 				Labels: map[string]string{
 					"app.kubernetes.io/component":  component.Name,
 					"app.kubernetes.io/instance":   safeLabelValue(owner.GetName()),
-					"app.kubernetes.io/managed-by": "cpgtoacp-operator",
+					"app.kubernetes.io/managed-by": "carewright-operator",
 				},
 				ApprovalMode: config.ApprovalMode,
 			}

@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: sandboxrequests.apps.cpgtoacp.io
+  name: sandboxrequests.apps.carewright.io
 spec:
-  group: apps.cpgtoacp.io
+  group: apps.carewright.io
   names:
     kind: SandboxRequest
     listKind: SandboxRequestList

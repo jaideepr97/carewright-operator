@@ -1,8 +1,8 @@
-# cpgtoacp-operator
+# carewright-operator
 
 ## Description
 
-The cpgtoacp operator manages the CPG Ingester and Care Plan Writer pipelines.
+The carewright operator manages the CPG Ingester and Care Plan Writer pipelines.
 Pipeline components are represented as OpenShell `SandboxRequest` resources so
 they run as policy-controlled sandboxes rather than ordinary Deployments. The
 pipeline orchestration itself is represented as a `SonataFlow` resource and is
@@ -88,7 +88,7 @@ ConfigMap-backed policy.
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
-make docker-build docker-push IMG=<some-registry>/cpgtoacp-operator:tag
+make docker-build docker-push IMG=<some-registry>/carewright-operator:tag
 ```
 
 **NOTE:** This image ought to be published in the personal registry you specified.
@@ -104,7 +104,7 @@ make install
 **Deploy the Manager to the cluster with the image specified by `IMG`:**
 
 ```sh
-make deploy IMG=<some-registry>/cpgtoacp-operator:tag
+make deploy IMG=<some-registry>/carewright-operator:tag
 ```
 
 > **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
@@ -147,7 +147,7 @@ Following the options to release and provide this solution to the users.
 1. Build the installer for the image built and published in the registry:
 
 ```sh
-make build-installer IMG=<some-registry>/cpgtoacp-operator:tag
+make build-installer IMG=<some-registry>/carewright-operator:tag
 ```
 
 **NOTE:** The makefile target mentioned above generates an 'install.yaml'
@@ -161,7 +161,7 @@ Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
 the project, i.e.:
 
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/cpgtoacp-operator/<tag or branch>/dist/install.yaml
+kubectl apply -f https://raw.githubusercontent.com/<org>/carewright-operator/<tag or branch>/dist/install.yaml
 ```
 
 ### By providing a Helm Chart

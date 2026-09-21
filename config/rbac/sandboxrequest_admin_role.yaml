@@ -1,7 +1,7 @@
-# This rule is not used by the project cpgtoacp-operator itself.
+# This rule is not used by the project carewright-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants full permissions ('*') over apps.cpgtoacp.io.
+# Grants full permissions ('*') over apps.carewright.io.
 # This role is intended for users authorized to modify roles and bindings within the cluster,
 # enabling them to delegate specific permissions to other users or groups as needed.
 
@@ -9,18 +9,18 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
-    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/name: carewright-operator
     app.kubernetes.io/managed-by: kustomize
   name: sandboxrequest-admin-role
 rules:
 - apiGroups:
-  - apps.cpgtoacp.io
+  - apps.carewright.io
   resources:
   - sandboxrequests
   verbs:
   - '*'
 - apiGroups:
-  - apps.cpgtoacp.io
+  - apps.carewright.io
   resources:
   - sandboxrequests/status
   verbs:

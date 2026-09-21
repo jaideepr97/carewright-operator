@@ -46,11 +46,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
-	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
+	appsv1alpha1 "carewright.io/carewright-operator/api/v1alpha1"
 )
 
 const (
-	sandboxFinalizer = "apps.cpgtoacp.io/sandbox-cleanup"
+	sandboxFinalizer = "apps.carewright.io/sandbox-cleanup"
 	readyCondition   = "Ready"
 
 	defaultWorkspace     = "default"
@@ -108,9 +108,9 @@ type SandboxRequestReconciler struct {
 	ClientFactory OpenShellClientFactory
 }
 
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=sandboxrequests/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=sandboxrequests/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 // Reconcile creates, observes, replaces, and deletes the OpenShell sandbox
@@ -161,11 +161,11 @@ func (r *SandboxRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	observed, err := r.getSandbox(ctx, &request, sandboxName)
 	if err == nil {
 		if request.Status.SpecHash == "" {
-			if observed.Labels["cpgtoacp.io/request-uid"] != string(request.UID) {
+			if observed.Labels["carewright.io/request-uid"] != string(request.UID) {
 				collision := fmt.Errorf("sandbox %q already exists and is not owned by this request", sandboxName)
 				return r.fail(ctx, &request, "NameCollision", collision)
 			}
-			request.Status.SpecHash = observed.Labels["cpgtoacp.io/spec-hash"]
+			request.Status.SpecHash = observed.Labels["carewright.io/spec-hash"]
 		}
 		if request.Status.SpecHash != desiredHash {
 			if err := r.deleteSandbox(ctx, &request, sandboxName); err != nil {
@@ -221,7 +221,7 @@ func (r *SandboxRequestReconciler) reconcileDelete(ctx context.Context, request 
 		if err != nil && !openshellv1.IsNotFound(err) {
 			return r.fail(ctx, request, "DeleteLookupFailed", err)
 		}
-		owned = err == nil && observation.Labels["cpgtoacp.io/request-uid"] == string(request.UID)
+		owned = err == nil && observation.Labels["carewright.io/request-uid"] == string(request.UID)
 	}
 	if owned {
 		if err := r.deleteSandbox(ctx, location, sandboxName); err != nil {
@@ -394,10 +394,10 @@ func (r *SandboxRequestReconciler) createSandbox(
 	for key, value := range request.Spec.Labels {
 		labels[key] = value
 	}
-	labels["cpgtoacp.io/request-name"] = request.Name
-	labels["cpgtoacp.io/request-namespace"] = request.Namespace
-	labels["cpgtoacp.io/request-uid"] = string(request.UID)
-	labels["cpgtoacp.io/spec-hash"] = specHash
+	labels["carewright.io/request-name"] = request.Name
+	labels["carewright.io/request-namespace"] = request.Namespace
+	labels["carewright.io/request-uid"] = string(request.UID)
+	labels["carewright.io/spec-hash"] = specHash
 
 	command := slices.Clone(request.Spec.Command)
 	if len(command) == 0 {

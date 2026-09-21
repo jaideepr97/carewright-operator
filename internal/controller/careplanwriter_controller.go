@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
+	appsv1alpha1 "carewright.io/carewright-operator/api/v1alpha1"
 )
 
 // CarePlanWriterReconciler reconciles a CarePlanWriter object
@@ -39,10 +39,10 @@ type CarePlanWriterReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=careplanwriters,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=careplanwriters/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=careplanwriters/finalizers,verbs=update
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=careplanwriters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=careplanwriters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=careplanwriters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sonataflow.org,resources=sonataflows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 

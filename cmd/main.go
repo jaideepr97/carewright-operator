@@ -39,8 +39,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
-	"cpgtoacp.io/cpgtoacp-operator/internal/controller"
+	appsv1alpha1 "carewright.io/carewright-operator/api/v1alpha1"
+	"carewright.io/carewright-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -224,7 +224,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "3233169b.cpgtoacp.io",
+		LeaderElectionID:       "3233169b.carewright.io",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

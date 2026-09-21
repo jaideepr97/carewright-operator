@@ -2,40 +2,40 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-domain: cpgtoacp.io
+domain: carewright.io
 layout:
 - go.kubebuilder.io/v4
 plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
-projectName: cpgtoacp-operator
-repo: cpgtoacp.io/cpgtoacp-operator
+projectName: carewright-operator
+repo: carewright.io/carewright-operator
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cpgtoacp.io
+  domain: carewright.io
   group: apps
   kind: CPGIngester
-  path: cpgtoacp.io/cpgtoacp-operator/api/v1alpha1
+  path: carewright.io/carewright-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cpgtoacp.io
+  domain: carewright.io
   group: apps
   kind: CarePlanWriter
-  path: cpgtoacp.io/cpgtoacp-operator/api/v1alpha1
+  path: carewright.io/carewright-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cpgtoacp.io
+  domain: carewright.io
   group: apps
   kind: SandboxRequest
-  path: cpgtoacp.io/cpgtoacp-operator/api/v1alpha1
+  path: carewright.io/carewright-operator/api/v1alpha1
   version: v1alpha1
 version: "3"

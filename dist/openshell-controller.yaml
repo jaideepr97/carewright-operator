@@ -1,88 +1,88 @@
 # Standalone OpenShell SandboxRequest controller.
 # Prerequisites:
-# - sandboxrequests.apps.cpgtoacp.io CRD is installed.
+# - sandboxrequests.apps.carewright.io CRD is installed.
 # - OpenShell gateway is reachable at openshell.openshell.svc.cluster.local:8080.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: cpgtoacp-operator-system
+  name: carewright-operator-system
   labels:
-    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/name: carewright-operator
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: cpgtoacp-operator-controller-manager
-  namespace: cpgtoacp-operator-system
+  name: carewright-operator-controller-manager
+  namespace: carewright-operator-system
   labels:
-    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/name: carewright-operator
     app.kubernetes.io/component: openshell-controller
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cpgtoacp-operator-sandboxrequest-controller
+  name: carewright-operator-sandboxrequest-controller
   labels:
-    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/name: carewright-operator
     app.kubernetes.io/component: openshell-controller
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps.cpgtoacp.io"]
+  - apiGroups: ["apps.carewright.io"]
     resources: ["sandboxrequests"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  - apiGroups: ["apps.cpgtoacp.io"]
+  - apiGroups: ["apps.carewright.io"]
     resources: ["sandboxrequests/status"]
     verbs: ["get", "update", "patch"]
-  - apiGroups: ["apps.cpgtoacp.io"]
+  - apiGroups: ["apps.carewright.io"]
     resources: ["sandboxrequests/finalizers"]
     verbs: ["update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: cpgtoacp-operator-sandboxrequest-controller
+  name: carewright-operator-sandboxrequest-controller
   labels:
-    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/name: carewright-operator
     app.kubernetes.io/component: openshell-controller
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cpgtoacp-operator-sandboxrequest-controller
+  name: carewright-operator-sandboxrequest-controller
 subjects:
   - kind: ServiceAccount
-    name: cpgtoacp-operator-controller-manager
-    namespace: cpgtoacp-operator-system
+    name: carewright-operator-controller-manager
+    namespace: carewright-operator-system
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cpgtoacp-operator-openshell-controller
-  namespace: cpgtoacp-operator-system
+  name: carewright-operator-openshell-controller
+  namespace: carewright-operator-system
   labels:
-    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/name: carewright-operator
     app.kubernetes.io/component: openshell-controller
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: cpgtoacp-operator
+      app.kubernetes.io/name: carewright-operator
       app.kubernetes.io/component: openshell-controller
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: cpgtoacp-operator
+        app.kubernetes.io/name: carewright-operator
         app.kubernetes.io/component: openshell-controller
     spec:
-      serviceAccountName: cpgtoacp-operator-controller-manager
+      serviceAccountName: carewright-operator-controller-manager
       securityContext:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: manager
-          image: quay.io/cpgtoacp/cpgtoacp-operator:0d099a7
+          image: quay.io/carewright/carewright-operator:0d099a7
           imagePullPolicy: IfNotPresent
           args:
             - --controllers=sandboxrequest

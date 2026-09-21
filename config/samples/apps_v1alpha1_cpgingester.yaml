@@ -1,8 +1,8 @@
-apiVersion: apps.cpgtoacp.io/v1alpha1
+apiVersion: apps.carewright.io/v1alpha1
 kind: CPGIngester
 metadata:
   labels:
-    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/name: carewright-operator
     app.kubernetes.io/managed-by: kustomize
   name: cpgingester-sample
 spec:
@@ -25,7 +25,7 @@ spec:
   carePlanWriterRef:
     name: careplanwriter-sample
   ingestion:
-    image: quay.io/cpgtoacp/cpg-ingester-ingestion:latest
+    image: quay.io/carewright/cpg-ingester-ingestion:latest
     logLevel: DEBUG
     doclingLogLevel: DEBUG
     pythonUnbuffered: true
@@ -35,18 +35,18 @@ spec:
     huggingFaceOffline: true
     ocrEnabled: true
   llmAnalysis:
-    image: quay.io/cpgtoacp/cpg-ingester-llm:latest
+    image: quay.io/carewright/cpg-ingester-llm:latest
     pythonPath: /app/src
     figureInterpretationEnabled: true
     figureInterpretationMaxFigures: 100
   assembly:
-    image: quay.io/cpgtoacp/cpg-ingester-assembly:latest
+    image: quay.io/carewright/cpg-ingester-assembly:latest
     pythonPath: /app/src
   delivery:
-    image: quay.io/cpgtoacp/cpg-ingester-delivery:latest
+    image: quay.io/carewright/cpg-ingester-delivery:latest
     pythonPath: /app/src
   bff:
-    image: quay.io/cpgtoacp/cpg-ingester-bff:latest
+    image: quay.io/carewright/cpg-ingester-bff:latest
     pythonPath: /app/src
   ui:
-    image: quay.io/cpgtoacp/cpg-ingester-ui:latest
+    image: quay.io/carewright/cpg-ingester-ui:latest

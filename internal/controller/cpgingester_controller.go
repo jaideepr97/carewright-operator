@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	appsv1alpha1 "cpgtoacp.io/cpgtoacp-operator/api/v1alpha1"
+	appsv1alpha1 "carewright.io/carewright-operator/api/v1alpha1"
 )
 
 // CPGIngesterReconciler reconciles a CPGIngester object
@@ -40,10 +40,10 @@ type CPGIngesterReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=cpgingesters,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=cpgingesters/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=cpgingesters/finalizers,verbs=update
-// +kubebuilder:rbac:groups=apps.cpgtoacp.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=cpgingesters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=cpgingesters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=cpgingesters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sonataflow.org,resources=sonataflows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 

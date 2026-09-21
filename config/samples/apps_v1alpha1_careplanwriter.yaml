@@ -1,8 +1,8 @@
-apiVersion: apps.cpgtoacp.io/v1alpha1
+apiVersion: apps.carewright.io/v1alpha1
 kind: CarePlanWriter
 metadata:
   labels:
-    app.kubernetes.io/name: cpgtoacp-operator
+    app.kubernetes.io/name: carewright-operator
     app.kubernetes.io/managed-by: kustomize
   name: careplanwriter-sample
 spec:
@@ -35,32 +35,32 @@ spec:
       identifierSystem: ""
       identifierValue: ""
   patientData:
-    image: quay.io/cpgtoacp/acp-writer-patient-data:latest
+    image: quay.io/carewright/acp-writer-patient-data:latest
     pythonPath: /app/src
   llmReasoning:
-    image: quay.io/cpgtoacp/acp-writer-llm:latest
+    image: quay.io/carewright/acp-writer-llm:latest
     pythonPath: /app/src
     embedding:
       provider: openai
       model: text-embedding-3-small
       url: http://litellm:4000
   decisionEngine:
-    image: quay.io/cpgtoacp/acp-writer-decision:latest
+    image: quay.io/carewright/acp-writer-decision:latest
     pythonPath: /app/src
   fhirGeneration:
-    image: quay.io/cpgtoacp/acp-writer-fhir-gen:latest
+    image: quay.io/carewright/acp-writer-fhir-gen:latest
     pythonPath: /app/src
   fhirServer:
-    image: quay.io/cpgtoacp/acp-writer-fhir-srv:latest
+    image: quay.io/carewright/acp-writer-fhir-srv:latest
     pythonPath: /app/src
   bff:
-    image: quay.io/cpgtoacp/acp-writer-bff:latest
+    image: quay.io/carewright/acp-writer-bff:latest
     pythonPath: /app/src
   ui:
-    image: quay.io/cpgtoacp/acp-writer-ui:latest
+    image: quay.io/carewright/acp-writer-ui:latest
   mcp:
-    image: quay.io/cpgtoacp/acp-writer-mcp:latest
+    image: quay.io/carewright/acp-writer-mcp:latest
     pythonPath: /app/src
   decisionService:
-    image: quay.io/cpgtoacp/decision-service:latest
+    image: quay.io/carewright/decision-service:latest
     javaOptions: -Dquarkus.http.host=0.0.0.0

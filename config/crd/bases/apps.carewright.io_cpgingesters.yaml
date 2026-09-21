@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: cpgingesters.apps.cpgtoacp.io
+  name: cpgingesters.apps.carewright.io
 spec:
-  group: apps.cpgtoacp.io
+  group: apps.carewright.io
   names:
     kind: CPGIngester
     listKind: CPGIngesterList

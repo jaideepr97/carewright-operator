@@ -25,7 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"cpgtoacp.io/cpgtoacp-operator/test/utils"
+	"carewright.io/carewright-operator/test/utils"
 )
 
 var (
@@ -39,7 +39,7 @@ var (
 
 	// projectImage is the name of the image which will be build and loaded
 	// with the code source changes to be tested.
-	projectImage = "cpgtoacp.io/cpgtoacp-operator:v0.0.1"
+	projectImage = "carewright.io/carewright-operator:v0.0.1"
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
@@ -48,7 +48,7 @@ var (
 // CertManager.
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
-	_, _ = fmt.Fprintf(GinkgoWriter, "Starting cpgtoacp-operator integration test suite\n")
+	_, _ = fmt.Fprintf(GinkgoWriter, "Starting carewright-operator integration test suite\n")
 	RunSpecs(t, "e2e suite")
 }
 
