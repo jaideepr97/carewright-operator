@@ -51,6 +51,7 @@ type sandboxComponent struct {
 	Command       []string
 	Env           map[string]string
 	Providers     []string
+	Registrations []appsv1alpha1.SandboxProviderRegistration
 	NetworkAccess []appsv1alpha1.SandboxNetworkAccessSpec
 }
 
@@ -98,15 +99,16 @@ func reconcileComponentSandboxes(
 			networkAccess := slices.Clone(workflowAccess)
 			networkAccess = append(networkAccess, component.NetworkAccess...)
 			request.Spec = appsv1alpha1.SandboxRequestSpec{
-				SandboxName: componentSandboxName(owner.GetName(), component.Name),
-				Gateway:     config.Gateway,
-				Workspace:   config.Workspace,
-				Image:       component.Spec.Image,
-				Command:     slices.Clone(command),
-				PolicyRef:   component.Spec.PolicyRef.DeepCopy(),
-				Providers:   uniqueStrings(providers),
-				Env:         mergedEnv(component.Spec.ExtraEnv, component.Env),
-				Resources:   component.Spec.Resources,
+				SandboxName:           componentSandboxName(owner.GetName(), component.Name),
+				Gateway:               config.Gateway,
+				Workspace:             config.Workspace,
+				Image:                 component.Spec.Image,
+				Command:               slices.Clone(command),
+				PolicyRef:             component.Spec.PolicyRef.DeepCopy(),
+				Providers:             uniqueStrings(providers),
+				ProviderRegistrations: slices.Clone(component.Registrations),
+				Env:                   mergedEnv(component.Spec.ExtraEnv, component.Env),
+				Resources:             component.Spec.Resources,
 				Services: []appsv1alpha1.SandboxServiceSpec{{
 					Name:       "http",
 					TargetPort: component.Port,
@@ -287,6 +289,30 @@ func uniqueStrings(values []string) []string {
 	}
 	if len(result) == 0 {
 		return nil
+	}
+	return result
+}
+
+func managedProvider(owner client.Object, purpose, externalName string, source *appsv1alpha1.ProviderSourceSpec) (string, *appsv1alpha1.SandboxProviderRegistration) {
+	if source == nil {
+		return externalName, nil
+	}
+	sum := sha256.Sum256([]byte(owner.GetNamespace() + "/" + owner.GetName() + "/" + string(owner.GetUID()) + "/" + purpose))
+	name := fmt.Sprintf("carewright-%s-%s", purpose, hex.EncodeToString(sum[:6]))
+	return name, &appsv1alpha1.SandboxProviderRegistration{
+		Name:      name,
+		Type:      source.Type,
+		Config:    maps.Clone(source.Config),
+		SecretRef: source.SecretRef,
+	}
+}
+
+func providerRegistrations(values ...*appsv1alpha1.SandboxProviderRegistration) []appsv1alpha1.SandboxProviderRegistration {
+	var result []appsv1alpha1.SandboxProviderRegistration
+	for _, value := range values {
+		if value != nil {
+			result = append(result, *value)
+		}
 	}
 	return result
 }

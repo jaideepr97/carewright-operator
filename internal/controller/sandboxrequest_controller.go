@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -53,10 +54,13 @@ const (
 	sandboxFinalizer = "apps.carewright.io/sandbox-cleanup"
 	readyCondition   = "Ready"
 
-	defaultWorkspace     = "default"
-	defaultMainShell     = "/bin/bash"
-	proposalApprovalMode = "proposal_approval_mode"
-	pollInterval         = 10 * time.Second
+	defaultWorkspace      = "default"
+	defaultMainShell      = "/bin/bash"
+	proposalApprovalMode  = "proposal_approval_mode"
+	providerSourceKey     = "carewright.io/credential-secret"
+	providerSecretUID     = "carewright.io/credential-secret-uid"
+	providerSecretVersion = "carewright.io/credential-secret-version"
+	pollInterval          = 10 * time.Second
 )
 
 // OpenShellClientSession owns an SDK client for one gateway connection.
@@ -111,7 +115,7 @@ type SandboxRequestReconciler struct {
 // +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.carewright.io,resources=sandboxrequests/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch
 
 // Reconcile creates, observes, replaces, and deletes the OpenShell sandbox
 // represented by a SandboxRequest.
@@ -139,6 +143,9 @@ func (r *SandboxRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	policy, err := r.policy(ctx, &request)
 	if err != nil {
 		return r.fail(ctx, &request, "PolicyUnavailable", err)
+	}
+	if err := r.registerProviders(ctx, &request); err != nil {
+		return r.fail(ctx, &request, "ProviderUnavailable", err)
 	}
 
 	desiredHash, err := requestHash(request.Spec, policy)
@@ -246,6 +253,87 @@ func closeSession(session *OpenShellClientSession) {
 	if session != nil && session.Close != nil {
 		_ = session.Close()
 	}
+}
+
+// registerProviders ensures Secret-backed providers exist before the sandbox is
+// created. The provider name is shared by components in one pipeline, so a
+// Secret version marker prevents unnecessary updates on every poll.
+func (r *SandboxRequestReconciler) registerProviders(ctx context.Context, request *appsv1alpha1.SandboxRequest) error {
+	if len(request.Spec.ProviderRegistrations) == 0 {
+		return nil
+	}
+	session, err := r.clientSession(request.Spec.Gateway)
+	if err != nil {
+		return err
+	}
+	defer closeSession(session)
+
+	for _, registration := range request.Spec.ProviderRegistrations {
+		if registration.Name == "" || registration.Type == "" || registration.SecretRef.Name == "" {
+			return fmt.Errorf("provider registration requires name, type, and secretRef.name")
+		}
+		if !slices.Contains(request.Spec.Providers, registration.Name) {
+			return fmt.Errorf("provider registration %q is not listed in spec.providers", registration.Name)
+		}
+		var secret corev1.Secret
+		key := types.NamespacedName{Name: registration.SecretRef.Name, Namespace: request.Namespace}
+		if err := r.Get(ctx, key, &secret); err != nil {
+			return fmt.Errorf("read provider Secret %s: %w", key, err)
+		}
+		if len(secret.Data) == 0 {
+			return fmt.Errorf("provider Secret %s contains no credentials", key)
+		}
+		credentials := make(map[string]string, len(secret.Data))
+		for name, value := range secret.Data {
+			credentials[name] = string(value)
+		}
+		source := key.String()
+		existing, err := session.Client.Providers().Get(ctx, workspace(request), registration.Name)
+		if err != nil && !openshellv1.IsNotFound(err) {
+			return fmt.Errorf("get OpenShell provider %q: %w", registration.Name, err)
+		}
+		if err == nil {
+			if existing.Annotations[providerSourceKey] != source {
+				return fmt.Errorf("OpenShell provider %q already exists and is not managed from Secret %s", registration.Name, source)
+			}
+			if existing.Annotations[providerSecretUID] == string(secret.UID) &&
+				existing.Annotations[providerSecretVersion] == secret.ResourceVersion &&
+				existing.Type == registration.Type &&
+				maps.Equal(existing.Spec.Config, registration.Config) {
+				continue
+			}
+		}
+		provider := &openshellv1.Provider{
+			Name: registration.Name,
+			Type: registration.Type,
+			Annotations: map[string]string{
+				providerSourceKey:     source,
+				providerSecretUID:     string(secret.UID),
+				providerSecretVersion: secret.ResourceVersion,
+			},
+			Spec: openshellv1.ProviderSpec{
+				Credentials: credentials,
+				Config:      maps.Clone(registration.Config),
+			},
+		}
+		if existing == nil {
+			_, err = session.Client.Providers().Create(ctx, workspace(request), provider)
+		} else {
+			provider.ID = existing.ID
+			provider.ResourceVersion = existing.ResourceVersion
+			provider.Labels = maps.Clone(existing.Labels)
+			for name, value := range existing.Annotations {
+				if _, managed := provider.Annotations[name]; !managed {
+					provider.Annotations[name] = value
+				}
+			}
+			_, err = session.Client.Providers().Update(ctx, workspace(request), provider)
+		}
+		if err != nil {
+			return fmt.Errorf("register OpenShell provider %q: %w", registration.Name, err)
+		}
+	}
+	return nil
 }
 
 func (r *SandboxRequestReconciler) policy(ctx context.Context, request *appsv1alpha1.SandboxRequest) ([]byte, error) {
@@ -686,11 +774,31 @@ func (r *SandboxRequestReconciler) requestsForPolicy(ctx context.Context, object
 	return result
 }
 
+func (r *SandboxRequestReconciler) requestsForProviderSecret(ctx context.Context, object client.Object) []reconcile.Request {
+	var requests appsv1alpha1.SandboxRequestList
+	if err := r.List(ctx, &requests, client.InNamespace(object.GetNamespace())); err != nil {
+		logf.FromContext(ctx).Error(err, "unable to list SandboxRequests for changed provider Secret")
+		return nil
+	}
+	result := make([]reconcile.Request, 0)
+	for i := range requests.Items {
+		request := &requests.Items[i]
+		for _, registration := range request.Spec.ProviderRegistrations {
+			if registration.SecretRef.Name == object.GetName() {
+				result = append(result, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(request)})
+				break
+			}
+		}
+	}
+	return result
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *SandboxRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1alpha1.SandboxRequest{}).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.requestsForPolicy)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.requestsForProviderSecret)).
 		Named("sandboxrequest").
 		Complete(r)
 }

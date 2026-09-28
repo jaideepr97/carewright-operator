@@ -79,6 +79,41 @@ spec:
                     default: cpg-artifacts
                     description: ArtifactBucket contains non-PHI pipeline artifacts.
                     type: string
+                  credentials:
+                    description: Credentials registers a provider from a namespace-local
+                      Secret.
+                    properties:
+                      config:
+                        additionalProperties:
+                          type: string
+                        description: Config holds non-secret OpenShell provider settings.
+                        type: object
+                      secretRef:
+                        description: SecretRef names the Secret containing provider
+                          credentials.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      type:
+                        description: Type is an OpenShell provider profile ID.
+                        minLength: 1
+                        type: string
+                    required:
+                    - secretRef
+                    - type
+                    type: object
+                    x-kubernetes-validations:
+                    - message: secretRef.name is required
+                      rule: self.secretRef.name.size() > 0
                   credentialsProvider:
                     description: |-
                       CredentialsProvider is an OpenShell provider that supplies
@@ -135,6 +170,8 @@ spec:
                 x-kubernetes-validations:
                 - message: url and managed are mutually exclusive
                   rule: '!(has(self.url) && has(self.managed))'
+                - message: credentialsProvider and credentials are mutually exclusive
+                  rule: '!(has(self.credentialsProvider) && has(self.credentials))'
               bff:
                 description: BFF exposes the backend API used by the Care Plan Writer
                   UI.
@@ -512,6 +549,41 @@ spec:
               fhirTarget:
                 description: FHIRTarget configures the target EHR.
                 properties:
+                  credentials:
+                    description: Credentials registers a provider from a namespace-local
+                      Secret.
+                    properties:
+                      config:
+                        additionalProperties:
+                          type: string
+                        description: Config holds non-secret OpenShell provider settings.
+                        type: object
+                      secretRef:
+                        description: SecretRef names the Secret containing provider
+                          credentials.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      type:
+                        description: Type is an OpenShell provider profile ID.
+                        minLength: 1
+                        type: string
+                    required:
+                    - secretRef
+                    - type
+                    type: object
+                    x-kubernetes-validations:
+                    - message: secretRef.name is required
+                      rule: self.secretRef.name.size() > 0
                   credentialsProvider:
                     description: |-
                       CredentialsProvider is an optional OpenShell provider that supplies
@@ -521,10 +593,48 @@ spec:
                     description: URL is the base FHIR R4 endpoint.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: credentialsProvider and credentials are mutually exclusive
+                  rule: '!(has(self.credentialsProvider) && has(self.credentials))'
               llm:
                 description: LLM configures the model endpoint used by reasoning and
                   FHIR generation.
                 properties:
+                  credentials:
+                    description: Credentials registers a provider from a namespace-local
+                      Secret.
+                    properties:
+                      config:
+                        additionalProperties:
+                          type: string
+                        description: Config holds non-secret OpenShell provider settings.
+                        type: object
+                      secretRef:
+                        description: SecretRef names the Secret containing provider
+                          credentials.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      type:
+                        description: Type is an OpenShell provider profile ID.
+                        minLength: 1
+                        type: string
+                    required:
+                    - secretRef
+                    - type
+                    type: object
+                    x-kubernetes-validations:
+                    - message: secretRef.name is required
+                      rule: self.secretRef.name.size() > 0
                   credentialsProvider:
                     description: CredentialsProvider is an OpenShell provider that
                       supplies LLM_API_KEY.
@@ -544,6 +654,9 @@ spec:
                     description: URL is the LiteLLM-compatible endpoint.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: credentialsProvider and credentials are mutually exclusive
+                  rule: '!(has(self.credentialsProvider) && has(self.credentials))'
               llmReasoning:
                 description: LLMReasoning resolves guidelines, evaluates decisions,
                   and composes plans.
@@ -557,6 +670,42 @@ spec:
                   embedding:
                     description: Embedding configures guideline vector embeddings.
                     properties:
+                      credentials:
+                        description: Credentials registers a provider from a namespace-local
+                          Secret.
+                        properties:
+                          config:
+                            additionalProperties:
+                              type: string
+                            description: Config holds non-secret OpenShell provider
+                              settings.
+                            type: object
+                          secretRef:
+                            description: SecretRef names the Secret containing provider
+                              credentials.
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          type:
+                            description: Type is an OpenShell provider profile ID.
+                            minLength: 1
+                            type: string
+                        required:
+                        - secretRef
+                        - type
+                        type: object
+                        x-kubernetes-validations:
+                        - message: secretRef.name is required
+                          rule: self.secretRef.name.size() > 0
                       credentialsProvider:
                         description: |-
                           CredentialsProvider is an OpenShell provider that supplies EMBEDDING_API_KEY.
@@ -574,6 +723,9 @@ spec:
                           LLM URL is used when omitted.
                         type: string
                     type: object
+                    x-kubernetes-validations:
+                    - message: credentialsProvider and credentials are mutually exclusive
+                      rule: '!(has(self.credentialsProvider) && has(self.credentials))'
                   extraEnv:
                     additionalProperties:
                       type: string

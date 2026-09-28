@@ -162,10 +162,20 @@ func (r *CarePlanWriterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter, endpoints map[string]string, workflowURL string) []sandboxComponent {
-	artifactEnv, artifactProvider := artifactStoreInputs(writer.Spec.ArtifactStore)
+	artifactEnv, externalArtifactProvider := artifactStoreInputs(writer.Spec.ArtifactStore)
+	var artifactSource *appsv1alpha1.ProviderSourceSpec
+	if writer.Spec.ArtifactStore != nil {
+		artifactSource = writer.Spec.ArtifactStore.Credentials
+	}
+	artifactProvider, artifactRegistration := managedProvider(writer, "artifact", externalArtifactProvider, artifactSource)
 	artifactAccess := networkAccessForURL("artifact-store", artifactEnv["ARTIFACT_STORE_URL"])
 	observabilityEnv := observabilityInputs(writer.Spec.Observability)
-	llmEnv, llmProvider := llmInputs(writer.Spec.LLM)
+	llmEnv, externalLLMProvider := llmInputs(writer.Spec.LLM)
+	var llmSource *appsv1alpha1.ProviderSourceSpec
+	if writer.Spec.LLM != nil {
+		llmSource = writer.Spec.LLM.Credentials
+	}
+	llmProvider, llmRegistration := managedProvider(writer, "llm", externalLLMProvider, llmSource)
 	inferenceAccess := networkAccessForURL("inference", llmEnv["LITELLM_URL"])
 	baseEnv := mergedEnv(artifactEnv, observabilityEnv)
 
@@ -187,12 +197,14 @@ func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter, endpoints map
 	reasoningEnv := llmPythonEnv(writer.Spec.LLMReasoning.PythonComponentSpec)
 	setIfNotEmpty(reasoningEnv, "DECISION_ENGINE_URL", decisionEngineURL)
 	embeddingProvider := ""
+	var embeddingRegistration *appsv1alpha1.SandboxProviderRegistration
 	var embeddingAccess []appsv1alpha1.SandboxNetworkAccessSpec
 	if embedding := writer.Spec.LLMReasoning.Embedding; embedding != nil {
 		setIfNotEmpty(reasoningEnv, "EMBEDDING_PROVIDER", embedding.Provider)
 		setIfNotEmpty(reasoningEnv, "EMBEDDING_MODEL", embedding.Model)
 		setIfNotEmpty(reasoningEnv, "EMBEDDING_BASE_URL", embedding.URL)
 		embeddingProvider = embedding.CredentialsProvider
+		embeddingProvider, embeddingRegistration = managedProvider(writer, "embedding", embeddingProvider, embedding.Credentials)
 		embeddingAccess = networkAccessForURL("embedding", embedding.URL)
 	}
 
@@ -207,10 +219,12 @@ func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter, endpoints map
 
 	fhirEnv := pythonEnv(writer.Spec.FHIRServer)
 	fhirProvider := ""
+	var fhirRegistration *appsv1alpha1.SandboxProviderRegistration
 	var fhirTargetAccess []appsv1alpha1.SandboxNetworkAccessSpec
 	if target := writer.Spec.FHIRTarget; target != nil {
 		setIfNotEmpty(fhirEnv, "FHIR_SERVER_URL", target.URL)
 		fhirProvider = target.CredentialsProvider
+		fhirProvider, fhirRegistration = managedProvider(writer, "fhir", fhirProvider, target.Credentials)
 		fhirTargetAccess = networkAccessForURL("fhir-target", target.URL)
 	}
 	if transparency := writer.Spec.AITransparency; transparency != nil && transparency.Reviewer != nil {
@@ -239,14 +253,14 @@ func carePlanWriterComponents(writer *appsv1alpha1.CarePlanWriter, endpoints map
 	setIfNotEmpty(decisionServiceEnv, "JAVA_OPTS_APPEND", writer.Spec.DecisionService.JavaOptions)
 
 	return []sandboxComponent{
-		{Name: "patient-data", Port: 8080, Spec: writer.Spec.PatientData.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.patient_data:app", "8080"), Env: pythonEnv(writer.Spec.PatientData), Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
-		{Name: "llm-reasoning", Port: 8080, Spec: writer.Spec.LLMReasoning.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.llm_reasoning:app", "8080"), Env: reasoningEnv, Providers: []string{artifactProvider, llmProvider, embeddingProvider}, NetworkAccess: combinedNetworkAccess(artifactAccess, inferenceAccess, embeddingAccess)},
-		{Name: "decision-engine", Port: 8080, Spec: writer.Spec.DecisionEngine.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.decision_engine:app", "8080"), Env: decisionEnv, Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
-		{Name: "fhir-generation", Port: 8080, Spec: writer.Spec.FHIRGeneration.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.fhir_generation:app", "8080"), Env: fhirGenerationEnv, Providers: []string{artifactProvider, llmProvider}, NetworkAccess: combinedNetworkAccess(artifactAccess, inferenceAccess)},
-		{Name: "fhir-server", Port: 8080, Spec: writer.Spec.FHIRServer.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.fhir_server:app", "8080"), Env: fhirEnv, Providers: []string{artifactProvider, fhirProvider}, NetworkAccess: combinedNetworkAccess(artifactAccess, fhirTargetAccess)},
-		{Name: "bff", Port: 8080, Spec: writer.Spec.BFF.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.bff:app", "8080"), Env: bffEnv, Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
+		{Name: "patient-data", Port: 8080, Spec: writer.Spec.PatientData.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.patient_data:app", "8080"), Env: pythonEnv(writer.Spec.PatientData), Providers: []string{artifactProvider}, Registrations: providerRegistrations(artifactRegistration), NetworkAccess: artifactAccess},
+		{Name: "llm-reasoning", Port: 8080, Spec: writer.Spec.LLMReasoning.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.llm_reasoning:app", "8080"), Env: reasoningEnv, Providers: []string{artifactProvider, llmProvider, embeddingProvider}, Registrations: providerRegistrations(artifactRegistration, llmRegistration, embeddingRegistration), NetworkAccess: combinedNetworkAccess(artifactAccess, inferenceAccess, embeddingAccess)},
+		{Name: "decision-engine", Port: 8080, Spec: writer.Spec.DecisionEngine.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.decision_engine:app", "8080"), Env: decisionEnv, Providers: []string{artifactProvider}, Registrations: providerRegistrations(artifactRegistration), NetworkAccess: artifactAccess},
+		{Name: "fhir-generation", Port: 8080, Spec: writer.Spec.FHIRGeneration.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.fhir_generation:app", "8080"), Env: fhirGenerationEnv, Providers: []string{artifactProvider, llmProvider}, Registrations: providerRegistrations(artifactRegistration, llmRegistration), NetworkAccess: combinedNetworkAccess(artifactAccess, inferenceAccess)},
+		{Name: "fhir-server", Port: 8080, Spec: writer.Spec.FHIRServer.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.fhir_server:app", "8080"), Env: fhirEnv, Providers: []string{artifactProvider, fhirProvider}, Registrations: providerRegistrations(artifactRegistration, fhirRegistration), NetworkAccess: combinedNetworkAccess(artifactAccess, fhirTargetAccess)},
+		{Name: "bff", Port: 8080, Spec: writer.Spec.BFF.ComponentSpec, Command: pythonServiceCommand("acp_writer.services.bff:app", "8080"), Env: bffEnv, Providers: []string{artifactProvider}, Registrations: providerRegistrations(artifactRegistration), NetworkAccess: artifactAccess},
 		{Name: "ui", Port: 8080, Spec: writer.Spec.UI, Command: []string{"/usr/libexec/s2i/run"}, Env: uiEnv},
-		{Name: "mcp", Port: 8090, Spec: writer.Spec.MCP.ComponentSpec, Command: pythonServiceCommand("acp_writer.mcp_proxy:app", "8090"), Env: mcpEnv, Providers: []string{llmProvider}, NetworkAccess: inferenceAccess},
+		{Name: "mcp", Port: 8090, Spec: writer.Spec.MCP.ComponentSpec, Command: pythonServiceCommand("acp_writer.mcp_proxy:app", "8090"), Env: mcpEnv, Providers: []string{llmProvider}, Registrations: providerRegistrations(llmRegistration), NetworkAccess: inferenceAccess},
 		{Name: "decision-service", Port: 8081, Spec: writer.Spec.DecisionService.ComponentSpec, Command: []string{"java", "-jar", "/app/quarkus-run.jar"}, Env: decisionServiceEnv},
 	}
 }

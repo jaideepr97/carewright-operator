@@ -71,7 +71,20 @@ go run ./cmd/main.go --controllers=sandboxrequest
 
 Environment values in `spec.env` are passed on the command line and must not
 contain secrets. Attach configured OpenShell credential providers through
-`spec.providers` instead.
+`spec.providers` instead. To have the operator register a provider, add a
+`credentials` block with an OpenShell profile `type` and a same-namespace
+`secretRef.name`. The Secret's data keys must match the credential names in
+that OpenShell provider profile. Optional non-secret provider settings go in
+`credentials.config`. The pipeline CRs support this under `artifactStore` and
+`llm`; CarePlanWriter also supports it under `llmReasoning.embedding` and
+`fhirTarget`.
+
+The pipeline controller generates a provider name and passes the Secret
+reference to each component's SandboxRequest. The SandboxRequest controller
+registers or updates the provider before sandbox creation and watches the
+Secret for credential rotation. The existing `credentialsProvider` field
+continues to refer to a provider managed outside the operator. Use one form
+per integration. Credentials are never stored in the CR or its status.
 
 See `config/samples/apps_v1alpha1_sandboxrequest.yaml` for a minimal request and
 ConfigMap-backed policy.

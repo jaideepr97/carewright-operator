@@ -77,6 +77,23 @@ type PythonComponentSpec struct {
 	PythonPath string `json:"pythonPath,omitempty"`
 }
 
+// ProviderSourceSpec registers an OpenShell provider from a Secret in the
+// pipeline's namespace. Secret keys must match the selected provider profile's
+// credential names; values are never copied into a custom resource.
+// +kubebuilder:validation:XValidation:rule="self.secretRef.name.size() > 0",message="secretRef.name is required"
+type ProviderSourceSpec struct {
+	// Type is an OpenShell provider profile ID.
+	// +kubebuilder:validation:MinLength=1
+	Type string `json:"type"`
+
+	// Config holds non-secret OpenShell provider settings.
+	// +optional
+	Config map[string]string `json:"config,omitempty"`
+
+	// SecretRef names the Secret containing provider credentials.
+	SecretRef corev1.LocalObjectReference `json:"secretRef"`
+}
+
 // ManagedObjectStoreSpec requests a MinIO ObjectStore from the installed
 // aistor.min.io operator. Omit this field when URL selects external storage.
 type ManagedObjectStoreSpec struct {
@@ -111,6 +128,7 @@ type ManagedObjectStoreSpec struct {
 
 // ArtifactStoreSpec configures the object store shared by pipeline components.
 // +kubebuilder:validation:XValidation:rule="!(has(self.url) && has(self.managed))",message="url and managed are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(has(self.credentialsProvider) && has(self.credentials))",message="credentialsProvider and credentials are mutually exclusive"
 type ArtifactStoreSpec struct {
 	// URL is the artifact store endpoint.
 	// +optional
@@ -130,6 +148,10 @@ type ArtifactStoreSpec struct {
 	// +optional
 	CredentialsProvider string `json:"credentialsProvider,omitempty"`
 
+	// Credentials registers a provider from a namespace-local Secret.
+	// +optional
+	Credentials *ProviderSourceSpec `json:"credentials,omitempty"`
+
 	// Managed requests a MinIO ObjectStore from the installed MinIO operator.
 	// The controller publishes its generated in-cluster endpoint to components.
 	// +optional
@@ -144,6 +166,7 @@ type ObservabilitySpec struct {
 }
 
 // LLMConfigSpec configures the model endpoint shared by LLM-enabled components.
+// +kubebuilder:validation:XValidation:rule="!(has(self.credentialsProvider) && has(self.credentials))",message="credentialsProvider and credentials are mutually exclusive"
 type LLMConfigSpec struct {
 	// URL is the LiteLLM-compatible endpoint.
 	// +optional
@@ -157,6 +180,10 @@ type LLMConfigSpec struct {
 	// CredentialsProvider is an OpenShell provider that supplies LLM_API_KEY.
 	// +optional
 	CredentialsProvider string `json:"credentialsProvider,omitempty"`
+
+	// Credentials registers a provider from a namespace-local Secret.
+	// +optional
+	Credentials *ProviderSourceSpec `json:"credentials,omitempty"`
 
 	// RequestTimeoutSeconds is the maximum duration of an LLM request.
 	// +kubebuilder:default=600

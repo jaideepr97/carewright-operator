@@ -21,6 +21,7 @@ import (
 )
 
 // EmbeddingSpec configures vector embedding generation for guideline retrieval.
+// +kubebuilder:validation:XValidation:rule="!(has(self.credentialsProvider) && has(self.credentials))",message="credentialsProvider and credentials are mutually exclusive"
 type EmbeddingSpec struct {
 	// Provider selects the embedding implementation, for example openai or local.
 	// +optional
@@ -38,6 +39,10 @@ type EmbeddingSpec struct {
 	// The LLM credentials provider is used when omitted.
 	// +optional
 	CredentialsProvider string `json:"credentialsProvider,omitempty"`
+
+	// Credentials registers a provider from a namespace-local Secret.
+	// +optional
+	Credentials *ProviderSourceSpec `json:"credentials,omitempty"`
 }
 
 // AITransparencySpec configures the provenance recorded with generated care plans.
@@ -77,6 +82,7 @@ type ReviewerSpec struct {
 }
 
 // FHIRTargetSpec configures the target EHR written by the FHIR server component.
+// +kubebuilder:validation:XValidation:rule="!(has(self.credentialsProvider) && has(self.credentials))",message="credentialsProvider and credentials are mutually exclusive"
 type FHIRTargetSpec struct {
 	// URL is the base FHIR R4 endpoint.
 	// +optional
@@ -86,6 +92,10 @@ type FHIRTargetSpec struct {
 	// FHIR_CLIENT_ID and FHIR_CLIENT_SECRET.
 	// +optional
 	CredentialsProvider string `json:"credentialsProvider,omitempty"`
+
+	// Credentials registers a provider from a namespace-local Secret.
+	// +optional
+	Credentials *ProviderSourceSpec `json:"credentials,omitempty"`
 }
 
 // CarePlanLLMReasoningComponentSpec configures guideline reasoning.

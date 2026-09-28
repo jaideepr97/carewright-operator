@@ -166,6 +166,56 @@ spec:
                 - key
                 type: object
                 x-kubernetes-map-type: atomic
+              providerRegistrations:
+                description: |-
+                  ProviderRegistrations are registered from Secrets before sandbox creation.
+                  Each registration name must also appear in Providers.
+                items:
+                  description: |-
+                    SandboxProviderRegistration declares a provider that the controller registers
+                    from a namespace-local Secret before creating the sandbox.
+                  properties:
+                    config:
+                      additionalProperties:
+                        type: string
+                      description: Config holds non-secret OpenShell provider settings.
+                      type: object
+                    name:
+                      description: Name is the provider name in the selected OpenShell
+                        workspace.
+                      minLength: 1
+                      type: string
+                    secretRef:
+                      description: SecretRef names the Secret containing provider
+                        credentials.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type:
+                      description: Type is an OpenShell provider profile ID.
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  - secretRef
+                  - type
+                  type: object
+                  x-kubernetes-validations:
+                  - message: secretRef.name is required
+                    rule: self.secretRef.name.size() > 0
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               providers:
                 description: Providers are OpenShell provider names used to inject
                   credentials securely.

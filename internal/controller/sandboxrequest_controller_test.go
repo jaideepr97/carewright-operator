@@ -275,6 +275,77 @@ filesystem_policy:
 		Expect(k8sClient.Delete(ctx, policy)).To(Succeed())
 	})
 
+	It("registers Secret-backed providers before creating a sandbox and rotates credentials", func() {
+		const requestName = "provider-registration-test"
+		const secretName = "provider-registration-credentials"
+		requestKey := types.NamespacedName{Name: requestName, Namespace: "default"}
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: "default"},
+			Data:       map[string][]byte{"api_key": []byte("first-key")},
+		}
+		request := &appsv1alpha1.SandboxRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: requestName, Namespace: "default"},
+			Spec: appsv1alpha1.SandboxRequestSpec{
+				Gateway:   appsv1alpha1.SandboxGatewaySpec{Endpoint: "http://openshell.test:8080"},
+				Workspace: "pipelines",
+				Image:     "example.invalid/component:test",
+				Providers: []string{"managed-llm"},
+				ProviderRegistrations: []appsv1alpha1.SandboxProviderRegistration{{
+					Name:      "managed-llm",
+					Type:      "openai",
+					SecretRef: corev1.LocalObjectReference{Name: secretName},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, request)).To(Succeed())
+
+		sdkClient := openshellfake.NewClient()
+		DeferCleanup(sdkClient.Close)
+		reconciler := &SandboxRequestReconciler{
+			Client:        k8sClient,
+			Scheme:        k8sClient.Scheme(),
+			ClientFactory: &fakeOpenShellClientFactory{client: sdkClient},
+		}
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("holding sandbox creation until the referenced Secret exists")
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).To(MatchError(ContainSubstring(secretName)))
+		_, err = sdkClient.Sandboxes().Get(ctx, "pipelines", requestName)
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
+
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+		provider, err := sdkClient.Providers().Get(ctx, "pipelines", "managed-llm")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(provider.Spec.Credentials).To(HaveKeyWithValue("api_key", "first-key"))
+		Expect(provider.Annotations[providerSourceKey]).To(Equal("default/" + secretName))
+		sandbox, err := sdkClient.Sandboxes().Get(ctx, "pipelines", requestName)
+		Expect(err).NotTo(HaveOccurred())
+		originalID := sandbox.ID
+
+		By("updating the provider without replacing the sandbox on Secret rotation")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: "default"}, secret)).To(Succeed())
+		secret.Data["api_key"] = []byte("rotated-key")
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+		provider, err = sdkClient.Providers().Get(ctx, "pipelines", "managed-llm")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(provider.Spec.Credentials).To(HaveKeyWithValue("api_key", "rotated-key"))
+		sandbox, err = sdkClient.Sandboxes().Get(ctx, "pipelines", requestName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sandbox.ID).To(Equal(originalID))
+
+		Expect(k8sClient.Get(ctx, requestKey, request)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, request)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+	})
+
 	It("rejects unknown policy fields", func() {
 		_, err := decodeSandboxPolicy([]byte("version: 1\nunknown_policy: true\n"))
 		Expect(err).To(MatchError(ContainSubstring("unknown field")))

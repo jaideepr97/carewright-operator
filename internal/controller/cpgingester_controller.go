@@ -168,10 +168,20 @@ func (r *CPGIngesterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func cpgIngesterComponents(ingester *appsv1alpha1.CPGIngester, endpoints map[string]string, workflowURL string) []sandboxComponent {
-	artifactEnv, artifactProvider := artifactStoreInputs(ingester.Spec.ArtifactStore)
+	artifactEnv, externalArtifactProvider := artifactStoreInputs(ingester.Spec.ArtifactStore)
+	var artifactSource *appsv1alpha1.ProviderSourceSpec
+	if ingester.Spec.ArtifactStore != nil {
+		artifactSource = ingester.Spec.ArtifactStore.Credentials
+	}
+	artifactProvider, artifactRegistration := managedProvider(ingester, "artifact", externalArtifactProvider, artifactSource)
 	artifactAccess := networkAccessForURL("artifact-store", artifactEnv["ARTIFACT_STORE_URL"])
 	observabilityEnv := observabilityInputs(ingester.Spec.Observability)
-	llmEnv, llmProvider := llmInputs(ingester.Spec.LLM)
+	llmEnv, externalLLMProvider := llmInputs(ingester.Spec.LLM)
+	var llmSource *appsv1alpha1.ProviderSourceSpec
+	if ingester.Spec.LLM != nil {
+		llmSource = ingester.Spec.LLM.Credentials
+	}
+	llmProvider, llmRegistration := managedProvider(ingester, "llm", externalLLMProvider, llmSource)
 	inferenceAccess := networkAccessForURL("inference", llmEnv["LITELLM_URL"])
 
 	ingestionEnv := mergedEnv(artifactEnv, observabilityEnv)
@@ -204,11 +214,11 @@ func cpgIngesterComponents(ingester *appsv1alpha1.CPGIngester, endpoints map[str
 	setIfNotEmpty(uiEnv, "BFF_HOST", endpointHost(endpoints["bff"]))
 
 	return []sandboxComponent{
-		{Name: "ingestion", Port: 8080, Spec: ingester.Spec.Ingestion.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.ingestion:app", "8080"), Env: ingestionEnv, Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
-		{Name: "llm-analysis", Port: 8080, Spec: ingester.Spec.LLMAnalysis.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.llm_analysis:app", "8080"), Env: analysisEnv, Providers: []string{artifactProvider, llmProvider}, NetworkAccess: combinedNetworkAccess(artifactAccess, inferenceAccess)},
-		{Name: "assembly", Port: 8080, Spec: ingester.Spec.Assembly.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.assembly_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Assembly), Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
-		{Name: "delivery", Port: 8080, Spec: ingester.Spec.Delivery.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.delivery_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Delivery), Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
-		{Name: "bff", Port: 8080, Spec: ingester.Spec.BFF.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.bff:app", "8080"), Env: bffEnv, Providers: []string{artifactProvider}, NetworkAccess: artifactAccess},
+		{Name: "ingestion", Port: 8080, Spec: ingester.Spec.Ingestion.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.ingestion:app", "8080"), Env: ingestionEnv, Providers: []string{artifactProvider}, Registrations: providerRegistrations(artifactRegistration), NetworkAccess: artifactAccess},
+		{Name: "llm-analysis", Port: 8080, Spec: ingester.Spec.LLMAnalysis.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.llm_analysis:app", "8080"), Env: analysisEnv, Providers: []string{artifactProvider, llmProvider}, Registrations: providerRegistrations(artifactRegistration, llmRegistration), NetworkAccess: combinedNetworkAccess(artifactAccess, inferenceAccess)},
+		{Name: "assembly", Port: 8080, Spec: ingester.Spec.Assembly.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.assembly_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Assembly), Providers: []string{artifactProvider}, Registrations: providerRegistrations(artifactRegistration), NetworkAccess: artifactAccess},
+		{Name: "delivery", Port: 8080, Spec: ingester.Spec.Delivery.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.delivery_svc:app", "8080"), Env: pythonEnv(ingester.Spec.Delivery), Providers: []string{artifactProvider}, Registrations: providerRegistrations(artifactRegistration), NetworkAccess: artifactAccess},
+		{Name: "bff", Port: 8080, Spec: ingester.Spec.BFF.ComponentSpec, Command: pythonServiceCommand("cpg_ingester.services.bff:app", "8080"), Env: bffEnv, Providers: []string{artifactProvider}, Registrations: providerRegistrations(artifactRegistration), NetworkAccess: artifactAccess},
 		{Name: "ui", Port: 8080, Spec: ingester.Spec.UI, Command: []string{"/usr/libexec/s2i/run"}, Env: uiEnv},
 	}
 }

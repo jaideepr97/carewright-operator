@@ -108,6 +108,26 @@ type SandboxNetworkAccessSpec struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
+// SandboxProviderRegistration declares a provider that the controller registers
+// from a namespace-local Secret before creating the sandbox.
+// +kubebuilder:validation:XValidation:rule="self.secretRef.name.size() > 0",message="secretRef.name is required"
+type SandboxProviderRegistration struct {
+	// Name is the provider name in the selected OpenShell workspace.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Type is an OpenShell provider profile ID.
+	// +kubebuilder:validation:MinLength=1
+	Type string `json:"type"`
+
+	// Config holds non-secret OpenShell provider settings.
+	// +optional
+	Config map[string]string `json:"config,omitempty"`
+
+	// SecretRef names the Secret containing provider credentials.
+	SecretRef corev1.LocalObjectReference `json:"secretRef"`
+}
+
 // SandboxRequestSpec defines an OpenShell sandbox and the process it should run.
 // The environment map is intended for non-secret values. OpenShell providers should
 // be used to make credentials available to the sandbox.
@@ -143,6 +163,13 @@ type SandboxRequestSpec struct {
 	// Providers are OpenShell provider names used to inject credentials securely.
 	// +optional
 	Providers []string `json:"providers,omitempty"`
+
+	// ProviderRegistrations are registered from Secrets before sandbox creation.
+	// Each registration name must also appear in Providers.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	ProviderRegistrations []SandboxProviderRegistration `json:"providerRegistrations,omitempty"`
 
 	// Env contains non-secret environment variables passed to the sandbox.
 	// +optional
