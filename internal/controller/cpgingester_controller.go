@@ -48,7 +48,9 @@ type CPGIngesterReconciler struct {
 // +kubebuilder:rbac:groups=sonataflow.org,resources=sonataflows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=aistor.min.io,resources=objectstores,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=agents.x-k8s.io,resources=sandboxes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile creates and manages one SandboxRequest for each CPG Ingester component.
 func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -59,6 +61,11 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
+		return ctrl.Result{}, err
+	}
+
+	exposure, err := reconcileUIExposure(ctx, r.Client, r.Scheme, &ingester)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -114,7 +121,6 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-
 	before := ingester.DeepCopy()
 	ingester.Status.ObservedGeneration = ingester.Generation
 	ingester.Status.Endpoints = maps.Clone(summary.Endpoints)
@@ -124,6 +130,9 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if workflow.Created {
 		ingester.Status.Endpoints["workflow"] = workflow.URL
 	}
+	if exposure.URL != "" {
+		ingester.Status.Endpoints["ui"] = exposure.URL
+	}
 	meta.SetStatusCondition(&ingester.Status.Conditions, metav1.Condition{
 		Type:               "Accepted",
 		Status:             metav1.ConditionTrue,
@@ -132,12 +141,16 @@ func (r *CPGIngesterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Message:            "The CPGIngester component sandboxes have been reconciled",
 	})
 	setPipelineReadyCondition(&ingester.Status.Conditions, ingester.Generation, summary, workflow)
+	setUIExposureCondition(&ingester.Status.Conditions, ingester.Generation, exposure)
 	if err := r.Status().Patch(ctx, &ingester, client.MergeFrom(before)); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	log.Info("reconciled CPGIngester sandboxes", "generation", ingester.Generation, "ready", summary.Ready, "desired", summary.Desired)
 
+	if exposure.URL == "" {
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -148,6 +161,8 @@ func (r *CPGIngesterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1alpha1.SandboxRequest{}).
 		Owns(sonataFlowObject()).
 		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.Service{}).
+		Owns(routeObject()).
 		Named("cpgingester").
 		Complete(r)
 }
