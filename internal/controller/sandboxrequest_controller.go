@@ -200,11 +200,18 @@ func (r *SandboxRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
+	cleanupPending, err := r.cleanupStaleProviders(ctx, &request)
+	if err != nil {
+		return r.fail(ctx, &request, "ProviderCleanupFailed", err)
+	}
 	if err := r.recordObserved(ctx, &request, sandboxName, desiredHash, observed, services); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	log.Info("reconciled OpenShell sandbox", "sandbox", sandboxName, "phase", observed.Phase)
+	if cleanupPending {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
 
@@ -233,6 +240,22 @@ func (r *SandboxRequestReconciler) reconcileDelete(ctx context.Context, request 
 	if owned {
 		if err := r.deleteSandbox(ctx, location, sandboxName); err != nil {
 			return r.fail(ctx, request, "DeleteFailed", err)
+		}
+	}
+
+	registrations := slices.Clone(request.Status.ManagedProviders)
+	for _, desired := range desiredManagedProviders(request) {
+		if !slices.Contains(registrations, desired) {
+			registrations = append(registrations, desired)
+		}
+	}
+	for _, registration := range registrations {
+		released, err := r.releaseProvider(ctx, request, registration, true)
+		if err != nil {
+			return r.fail(ctx, request, "ProviderCleanupFailed", err)
+		}
+		if !released {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 	}
 
@@ -300,6 +323,9 @@ func (r *SandboxRequestReconciler) registerProviders(ctx context.Context, reques
 				existing.Annotations[providerSecretVersion] == secret.ResourceVersion &&
 				existing.Type == registration.Type &&
 				maps.Equal(existing.Spec.Config, registration.Config) {
+				if err := r.trackManagedProvider(ctx, request, managedProviderStatus(request, registration)); err != nil {
+					return err
+				}
 				continue
 			}
 		}
@@ -332,8 +358,189 @@ func (r *SandboxRequestReconciler) registerProviders(ctx context.Context, reques
 		if err != nil {
 			return fmt.Errorf("register OpenShell provider %q: %w", registration.Name, err)
 		}
+		if err := r.trackManagedProvider(ctx, request, managedProviderStatus(request, registration)); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func managedProviderStatus(request *appsv1alpha1.SandboxRequest, registration appsv1alpha1.SandboxProviderRegistration) appsv1alpha1.ManagedProviderStatus {
+	return appsv1alpha1.ManagedProviderStatus{
+		Name:       registration.Name,
+		Gateway:    resolvedGatewaySpec(request.Spec.Gateway),
+		Workspace:  workspace(request),
+		SecretName: registration.SecretRef.Name,
+	}
+}
+
+func resolvedGatewaySpec(gateway appsv1alpha1.SandboxGatewaySpec) appsv1alpha1.SandboxGatewaySpec {
+	if gateway.Endpoint == "" {
+		gateway.Endpoint = os.Getenv("OPENSHELL_GATEWAY_ENDPOINT")
+		if !gateway.Insecure {
+			gateway.Insecure, _ = strconv.ParseBool(os.Getenv("OPENSHELL_GATEWAY_INSECURE"))
+		}
+	}
+	return gateway
+}
+
+func desiredManagedProviders(request *appsv1alpha1.SandboxRequest) []appsv1alpha1.ManagedProviderStatus {
+	result := make([]appsv1alpha1.ManagedProviderStatus, 0, len(request.Spec.ProviderRegistrations))
+	for _, registration := range request.Spec.ProviderRegistrations {
+		result = append(result, managedProviderStatus(request, registration))
+	}
+	return result
+}
+
+func providerGatewayAddress(gateway appsv1alpha1.SandboxGatewaySpec) string {
+	if gateway.Name != "" {
+		return "name:" + gateway.Name
+	}
+	endpoint := gateway.Endpoint
+	if endpoint == "" {
+		endpoint = os.Getenv("OPENSHELL_GATEWAY_ENDPOINT")
+	}
+	return strings.TrimRight(endpoint, "/")
+}
+
+func sameProviderLocation(left, right appsv1alpha1.ManagedProviderStatus) bool {
+	return left.Name == right.Name &&
+		left.Workspace == right.Workspace &&
+		providerGatewayAddress(left.Gateway) == providerGatewayAddress(right.Gateway)
+}
+
+func (r *SandboxRequestReconciler) trackManagedProvider(ctx context.Context, request *appsv1alpha1.SandboxRequest, registration appsv1alpha1.ManagedProviderStatus) error {
+	if slices.Contains(request.Status.ManagedProviders, registration) {
+		return nil
+	}
+	before := request.DeepCopy()
+	request.Status.ManagedProviders = append(request.Status.ManagedProviders, registration)
+	return r.Status().Patch(ctx, request, client.MergeFrom(before))
+}
+
+func (r *SandboxRequestReconciler) cleanupStaleProviders(ctx context.Context, request *appsv1alpha1.SandboxRequest) (bool, error) {
+	desired := desiredManagedProviders(request)
+	remaining := make([]appsv1alpha1.ManagedProviderStatus, 0, len(request.Status.ManagedProviders))
+	pending := false
+	for _, registration := range request.Status.ManagedProviders {
+		if slices.Contains(desired, registration) {
+			remaining = append(remaining, registration)
+			continue
+		}
+		// Keep tracking a provider still attached to this sandbox, even if
+		// its registration was removed from the desired spec.
+		if providerGatewayAddress(request.Spec.Gateway) == providerGatewayAddress(registration.Gateway) &&
+			workspace(request) == registration.Workspace &&
+			slices.Contains(request.Spec.Providers, registration.Name) {
+			remaining = append(remaining, registration)
+			continue
+		}
+		released, err := r.releaseProvider(ctx, request, registration, false)
+		if err != nil {
+			return false, err
+		}
+		if !released {
+			remaining = append(remaining, registration)
+			pending = true
+		}
+	}
+	if !slices.Equal(request.Status.ManagedProviders, remaining) {
+		before := request.DeepCopy()
+		request.Status.ManagedProviders = remaining
+		if err := r.Status().Patch(ctx, request, client.MergeFrom(before)); err != nil {
+			return false, err
+		}
+	}
+	return pending, nil
+}
+
+// releaseProvider returns false while a deleting peer still needs the provider.
+// This leaves one finalizer in place so concurrent deletions cannot orphan it.
+func (r *SandboxRequestReconciler) releaseProvider(ctx context.Context, request *appsv1alpha1.SandboxRequest, registration appsv1alpha1.ManagedProviderStatus, deleting bool) (bool, error) {
+	var requests appsv1alpha1.SandboxRequestList
+	if err := r.List(ctx, &requests); err != nil {
+		return false, fmt.Errorf("list SandboxRequests using provider %q: %w", registration.Name, err)
+	}
+	currentKey := request.Namespace + "/" + request.Name
+	for i := range requests.Items {
+		other := &requests.Items[i]
+		otherKey := other.Namespace + "/" + other.Name
+		if otherKey == currentKey || !requestReferencesProvider(other, registration) {
+			continue
+		}
+		// A consumer or manager without a finalizer cannot clean it up for us.
+		if other.Namespace != request.Namespace || !requestManagesProvider(other, registration) || !containsString(other.Finalizers, sandboxFinalizer) {
+			return false, nil
+		}
+		if other.DeletionTimestamp.IsZero() {
+			return true, nil
+		}
+		if !deleting || otherKey < currentKey {
+			return false, nil
+		}
+		// A deleting request with a smaller key removes its finalizer first.
+		return true, nil
+	}
+
+	session, err := r.clientSession(registration.Gateway)
+	if err != nil {
+		return false, err
+	}
+	defer closeSession(session)
+	provider, err := session.Client.Providers().Get(ctx, registration.Workspace, registration.Name)
+	if openshellv1.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get OpenShell provider %q for cleanup: %w", registration.Name, err)
+	}
+	source := request.Namespace + "/" + registration.SecretName
+	if provider.Annotations[providerSourceKey] != source {
+		return true, nil
+	}
+	if err := session.Client.Providers().Delete(ctx, registration.Workspace, registration.Name); err != nil && !openshellv1.IsNotFound(err) {
+		return false, fmt.Errorf("delete OpenShell provider %q: %w", registration.Name, err)
+	}
+	return true, nil
+}
+
+func requestManagesProvider(request *appsv1alpha1.SandboxRequest, registration appsv1alpha1.ManagedProviderStatus) bool {
+	for _, tracked := range request.Status.ManagedProviders {
+		if sameProviderLocation(tracked, registration) && tracked.SecretName == registration.SecretName {
+			return true
+		}
+	}
+	current := appsv1alpha1.ManagedProviderStatus{
+		Name:      registration.Name,
+		Gateway:   request.Spec.Gateway,
+		Workspace: workspace(request),
+	}
+	if !sameProviderLocation(current, registration) {
+		return false
+	}
+	for _, desired := range request.Spec.ProviderRegistrations {
+		if desired.Name == registration.Name && desired.SecretRef.Name == registration.SecretName {
+			return true
+		}
+	}
+	return false
+}
+
+func requestReferencesProvider(request *appsv1alpha1.SandboxRequest, registration appsv1alpha1.ManagedProviderStatus) bool {
+	current := appsv1alpha1.ManagedProviderStatus{
+		Name:      registration.Name,
+		Gateway:   request.Spec.Gateway,
+		Workspace: workspace(request),
+	}
+	if sameProviderLocation(current, registration) && slices.Contains(request.Spec.Providers, registration.Name) {
+		return true
+	}
+	for _, tracked := range request.Status.ManagedProviders {
+		if sameProviderLocation(tracked, registration) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *SandboxRequestReconciler) policy(ctx context.Context, request *appsv1alpha1.SandboxRequest) ([]byte, error) {
@@ -440,7 +647,7 @@ func effectiveSandboxName(request *appsv1alpha1.SandboxRequest) string {
 
 func previousLocationChanged(request *appsv1alpha1.SandboxRequest, sandboxName string) bool {
 	return request.Status.SandboxName != sandboxName ||
-		request.Status.Gateway != request.Spec.Gateway ||
+		request.Status.Gateway != resolvedGatewaySpec(request.Spec.Gateway) ||
 		request.Status.Workspace != workspace(request)
 }
 
@@ -665,7 +872,7 @@ func (r *SandboxRequestReconciler) recordObserved(
 	before := request.DeepCopy()
 	request.Status.SandboxName = name
 	request.Status.SandboxID = observation.ID
-	request.Status.Gateway = request.Spec.Gateway
+	request.Status.Gateway = resolvedGatewaySpec(request.Spec.Gateway)
 	request.Status.Workspace = workspace(request)
 	request.Status.SpecHash = specHash
 	request.Status.ObservedGeneration = request.Generation

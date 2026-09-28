@@ -84,7 +84,11 @@ reference to each component's SandboxRequest. The SandboxRequest controller
 registers or updates the provider before sandbox creation and watches the
 Secret for credential rotation. The existing `credentialsProvider` field
 continues to refer to a provider managed outside the operator. Use one form
-per integration. Credentials are never stored in the CR or its status.
+per integration. Credentials are never stored in the CR or its status. When a request changes
+its provider registrations or is deleted, the controller removes an old
+provider after no SandboxRequest in that gateway workspace still uses it.
+Delete pipeline resources before shutting down the OpenShell gateway so their
+finalizers can complete. Referenced Kubernetes Secrets remain user-owned.
 
 See `config/samples/apps_v1alpha1_sandboxrequest.yaml` for a minimal request and
 ConfigMap-backed policy.

@@ -297,7 +297,7 @@ func managedProvider(owner client.Object, purpose, externalName string, source *
 	if source == nil {
 		return externalName, nil
 	}
-	sum := sha256.Sum256([]byte(owner.GetNamespace() + "/" + owner.GetName() + "/" + string(owner.GetUID()) + "/" + purpose))
+	sum := sha256.Sum256([]byte(owner.GetNamespace() + "/" + owner.GetName() + "/" + string(owner.GetUID()) + "/" + purpose + "/" + source.SecretRef.Name))
 	name := fmt.Sprintf("carewright-%s-%s", purpose, hex.EncodeToString(sum[:6]))
 	return name, &appsv1alpha1.SandboxProviderRegistration{
 		Name:      name,

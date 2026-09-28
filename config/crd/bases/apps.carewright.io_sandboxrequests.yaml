@@ -364,6 +364,45 @@ spec:
                       controllers require Endpoint instead.
                     type: string
                 type: object
+              managedProviders:
+                description: ManagedProviders records providers that may need cleanup.
+                items:
+                  description: |-
+                    ManagedProviderStatus records a provider registered by this request so it
+                    can be released even after the request changes its gateway or Secret.
+                  properties:
+                    gateway:
+                      description: Gateway is the gateway where the provider was registered.
+                      properties:
+                        endpoint:
+                          description: Endpoint is the URL of an OpenShell gateway.
+                          type: string
+                        insecure:
+                          description: Insecure permits plaintext HTTP or skips certificate
+                            verification for HTTPS.
+                          type: boolean
+                        name:
+                          description: |-
+                            Name is retained for compatibility with CLI-based controllers. SDK-based
+                            controllers require Endpoint instead.
+                          type: string
+                      type: object
+                    name:
+                      description: Name is the provider name in OpenShell.
+                      type: string
+                    secretName:
+                      description: SecretName is the namespace-local Secret that supplied
+                        its credentials.
+                      type: string
+                    workspace:
+                      description: Workspace is the provider's OpenShell workspace.
+                      type: string
+                  required:
+                  - name
+                  - secretName
+                  - workspace
+                  type: object
+                type: array
               observedGeneration:
                 description: ObservedGeneration is the most recent generation processed
                   by the controller.

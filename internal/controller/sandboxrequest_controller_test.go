@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
 
 	openshellv1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1"
 	openshellfake "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/fake"
@@ -339,10 +341,281 @@ filesystem_policy:
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sandbox.ID).To(Equal(originalID))
 
+		By("retaining a shared provider while another request still uses it")
+		Expect(k8sClient.Get(ctx, requestKey, request)).To(Succeed())
+		peerKey := types.NamespacedName{Name: "provider-registration-peer", Namespace: "default"}
+		peer := &appsv1alpha1.SandboxRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: peerKey.Name, Namespace: peerKey.Namespace},
+			Spec:       *request.Spec.DeepCopy(),
+		}
+		Expect(k8sClient.Create(ctx, peer)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: peerKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: peerKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("releasing a provider removed from the first request")
+		request.Spec.Providers = []string{"replacement-llm"}
+		request.Spec.ProviderRegistrations[0].Name = "replacement-llm"
+		Expect(k8sClient.Update(ctx, request)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "managed-llm")
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "replacement-llm")
+		Expect(err).NotTo(HaveOccurred())
+
+		By("removing each provider after its last sandbox is deleted")
 		Expect(k8sClient.Get(ctx, requestKey, request)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, request)).To(Succeed())
 		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
 		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "replacement-llm")
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "managed-llm")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, peerKey, peer)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, peer)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: peerKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "managed-llm")
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
+		Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+	})
+
+	It("keeps a finalizer until concurrent shared-provider deletions complete", func() {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "concurrent-provider-secret", Namespace: "default"},
+			Data:       map[string][]byte{"api_key": []byte("test-key")},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		sdkClient := openshellfake.NewClient()
+		DeferCleanup(sdkClient.Close)
+		reconciler := &SandboxRequestReconciler{
+			Client:        k8sClient,
+			Scheme:        k8sClient.Scheme(),
+			ClientFactory: &fakeOpenShellClientFactory{client: sdkClient},
+		}
+		keys := []types.NamespacedName{
+			{Name: "shared-provider-a", Namespace: "default"},
+			{Name: "shared-provider-b", Namespace: "default"},
+		}
+		for _, item := range keys {
+			request := &appsv1alpha1.SandboxRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: item.Name, Namespace: item.Namespace},
+				Spec: appsv1alpha1.SandboxRequestSpec{
+					Gateway:   appsv1alpha1.SandboxGatewaySpec{Endpoint: "http://openshell.test:8080"},
+					Workspace: "pipelines",
+					Image:     "example.invalid/component:test",
+					Providers: []string{"shared-provider"},
+					ProviderRegistrations: []appsv1alpha1.SandboxProviderRegistration{{
+						Name:      "shared-provider",
+						Type:      "openai",
+						SecretRef: corev1.LocalObjectReference{Name: secret.Name},
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, request)).To(Succeed())
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: item})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: item})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, item, request)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, request)).To(Succeed())
+		}
+
+		result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: keys[1]})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "shared-provider")
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: keys[0]})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: keys[1]})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "shared-provider")
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
+		Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+	})
+
+	It("does not hand provider cleanup to a request without a finalizer", func() {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "unreconciled-peer-secret", Namespace: "default"},
+			Data:       map[string][]byte{"api_key": []byte("test-key")},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		ownerKey := types.NamespacedName{Name: "unreconciled-owner", Namespace: "default"}
+		peerKey := types.NamespacedName{Name: "unreconciled-peer", Namespace: "default"}
+		owner := &appsv1alpha1.SandboxRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: ownerKey.Name, Namespace: ownerKey.Namespace},
+			Spec: appsv1alpha1.SandboxRequestSpec{
+				Gateway:   appsv1alpha1.SandboxGatewaySpec{Endpoint: "http://openshell.test:8080"},
+				Workspace: "pipelines",
+				Image:     "example.invalid/component:test",
+				Providers: []string{"unreconciled-provider"},
+				ProviderRegistrations: []appsv1alpha1.SandboxProviderRegistration{{
+					Name: "unreconciled-provider", Type: "openai",
+					SecretRef: corev1.LocalObjectReference{Name: secret.Name},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, owner)).To(Succeed())
+		sdkClient := openshellfake.NewClient()
+		DeferCleanup(sdkClient.Close)
+		reconciler := &SandboxRequestReconciler{
+			Client:        k8sClient,
+			Scheme:        k8sClient.Scheme(),
+			ClientFactory: &fakeOpenShellClientFactory{client: sdkClient},
+		}
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: ownerKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: ownerKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		peer := &appsv1alpha1.SandboxRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: peerKey.Name, Namespace: peerKey.Namespace},
+			Spec:       *owner.Spec.DeepCopy(),
+		}
+		Expect(k8sClient.Create(ctx, peer)).To(Succeed())
+		Expect(k8sClient.Get(ctx, ownerKey, owner)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, owner)).To(Succeed())
+		result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: ownerKey})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
+
+		Expect(k8sClient.Delete(ctx, peer)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: ownerKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "unreconciled-provider")
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
+		Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+	})
+
+	It("waits for a consumer-only sandbox before deleting its provider", func() {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "consumer-provider-secret", Namespace: "default"},
+			Data:       map[string][]byte{"api_key": []byte("test-key")},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		sdkClient := openshellfake.NewClient()
+		DeferCleanup(sdkClient.Close)
+		reconciler := &SandboxRequestReconciler{
+			Client:        k8sClient,
+			Scheme:        k8sClient.Scheme(),
+			ClientFactory: &fakeOpenShellClientFactory{client: sdkClient},
+		}
+		managedKey := types.NamespacedName{Name: "consumer-provider-owner", Namespace: "default"}
+		consumerKey := types.NamespacedName{Name: "consumer-provider-user", Namespace: "default"}
+		gateway := appsv1alpha1.SandboxGatewaySpec{Endpoint: "http://openshell.test:8080"}
+		managed := &appsv1alpha1.SandboxRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: managedKey.Name, Namespace: managedKey.Namespace},
+			Spec: appsv1alpha1.SandboxRequestSpec{
+				Gateway: gateway, Workspace: "pipelines",
+				Image:     "example.invalid/component:test",
+				Providers: []string{"consumer-provider"},
+				ProviderRegistrations: []appsv1alpha1.SandboxProviderRegistration{{
+					Name: "consumer-provider", Type: "openai",
+					SecretRef: corev1.LocalObjectReference{Name: secret.Name},
+				}},
+			},
+		}
+		consumer := &appsv1alpha1.SandboxRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: consumerKey.Name, Namespace: consumerKey.Namespace},
+			Spec: appsv1alpha1.SandboxRequestSpec{
+				Gateway: gateway, Workspace: "pipelines",
+				Image:     "example.invalid/component:test",
+				Providers: []string{"consumer-provider"},
+			},
+		}
+		for _, request := range []*appsv1alpha1.SandboxRequest{managed, consumer} {
+			Expect(k8sClient.Create(ctx, request)).To(Succeed())
+			key := types.NamespacedName{Name: request.Name, Namespace: request.Namespace}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		Expect(k8sClient.Get(ctx, managedKey, managed)).To(Succeed())
+		managed.Spec.ProviderRegistrations = nil
+		Expect(k8sClient.Update(ctx, managed)).To(Succeed())
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: managedKey})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, managedKey, managed)).To(Succeed())
+		Expect(managed.Status.ManagedProviders).To(HaveLen(1))
+		Expect(k8sClient.Delete(ctx, managed)).To(Succeed())
+		result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: managedKey})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "consumer-provider")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, consumerKey, consumer)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, consumer)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: consumerKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: managedKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "pipelines", "consumer-provider")
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
+		Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+	})
+
+	It("cleans up the previous provider location after a workspace change", func() {
+		const requestName = "provider-workspace-move"
+		requestKey := types.NamespacedName{Name: requestName, Namespace: "default"}
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "workspace-move-secret", Namespace: "default"},
+			Data:       map[string][]byte{"api_key": []byte("test-key")},
+		}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		request := &appsv1alpha1.SandboxRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: requestName, Namespace: "default"},
+			Spec: appsv1alpha1.SandboxRequestSpec{
+				Gateway:   appsv1alpha1.SandboxGatewaySpec{Endpoint: "http://openshell.test:8080"},
+				Workspace: "first",
+				Image:     "example.invalid/component:test",
+				Providers: []string{"moving-provider"},
+				ProviderRegistrations: []appsv1alpha1.SandboxProviderRegistration{{
+					Name:      "moving-provider",
+					Type:      "openai",
+					SecretRef: corev1.LocalObjectReference{Name: secret.Name},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, request)).To(Succeed())
+		sdkClient := openshellfake.NewClient()
+		DeferCleanup(sdkClient.Close)
+		reconciler := &SandboxRequestReconciler{
+			Client:        k8sClient,
+			Scheme:        k8sClient.Scheme(),
+			ClientFactory: &fakeOpenShellClientFactory{client: sdkClient},
+		}
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "first", "moving-provider")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, requestKey, request)).To(Succeed())
+		request.Spec.Workspace = "second"
+		Expect(k8sClient.Update(ctx, request)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "first", "moving-provider")
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
+		_, err = sdkClient.Providers().Get(ctx, "second", "moving-provider")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, requestKey, request)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, request)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: requestKey})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = sdkClient.Providers().Get(ctx, "second", "moving-provider")
+		Expect(openshellv1.IsNotFound(err)).To(BeTrue())
 		Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
 	})
 
@@ -393,3 +666,28 @@ network_policies:
 		Expect(rule.Binaries).To(ConsistOf(openshellv1.PolicyNetworkBinary{Path: "**"}))
 	})
 })
+
+func TestResolvedGatewayLocationSurvivesDefaultChange(t *testing.T) {
+	t.Setenv("OPENSHELL_GATEWAY_ENDPOINT", "http://old-gateway.test:8080")
+	request := &appsv1alpha1.SandboxRequest{
+		Spec: appsv1alpha1.SandboxRequestSpec{
+			Gateway:   appsv1alpha1.SandboxGatewaySpec{},
+			Workspace: "default",
+		},
+		Status: appsv1alpha1.SandboxRequestStatus{
+			SandboxName: "sandbox",
+			Gateway:     resolvedGatewaySpec(appsv1alpha1.SandboxGatewaySpec{}),
+			Workspace:   "default",
+		},
+	}
+	if previousLocationChanged(request, "sandbox") {
+		t.Fatal("the recorded gateway should match the current default")
+	}
+	t.Setenv("OPENSHELL_GATEWAY_ENDPOINT", "http://new-gateway.test:8080")
+	if !previousLocationChanged(request, "sandbox") {
+		t.Fatal("changing the default gateway must mark the old sandbox location as changed")
+	}
+	if request.Status.Gateway.Endpoint != "http://old-gateway.test:8080" {
+		t.Fatalf("recorded gateway changed unexpectedly: %q", request.Status.Gateway.Endpoint)
+	}
+}

@@ -203,6 +203,22 @@ type SandboxRequestSpec struct {
 	ApprovalMode string `json:"approvalMode,omitempty"`
 }
 
+// ManagedProviderStatus records a provider registered by this request so it
+// can be released even after the request changes its gateway or Secret.
+type ManagedProviderStatus struct {
+	// Name is the provider name in OpenShell.
+	Name string `json:"name"`
+
+	// Gateway is the gateway where the provider was registered.
+	Gateway SandboxGatewaySpec `json:"gateway,omitempty"`
+
+	// Workspace is the provider's OpenShell workspace.
+	Workspace string `json:"workspace"`
+
+	// SecretName is the namespace-local Secret that supplied its credentials.
+	SecretName string `json:"secretName"`
+}
+
 // SandboxRequestStatus defines the observed OpenShell sandbox state.
 type SandboxRequestStatus struct {
 	// SandboxName is the effective OpenShell sandbox name.
@@ -238,6 +254,10 @@ type SandboxRequestStatus struct {
 	// +listMapKey=name
 	// +optional
 	Services []SandboxServiceStatus `json:"services,omitempty"`
+
+	// ManagedProviders records providers that may need cleanup.
+	// +optional
+	ManagedProviders []ManagedProviderStatus `json:"managedProviders,omitempty"`
 
 	// Conditions describe whether the sandbox is available or reconciliation failed.
 	// +optional
