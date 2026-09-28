@@ -63,13 +63,13 @@ func serviceKey(workspace, sandboxName, serviceName string) string {
 
 func (c *fakeServiceClient) Expose(_ context.Context, workspace, sandboxName, serviceName string, targetPort uint32, domain bool) (*openshellv1.ServiceEndpoint, error) {
 	endpoint := &openshellv1.ServiceEndpoint{
-		ID:          "endpoint-" + serviceName,
-		SandboxName: sandboxName,
-		ServiceName: serviceName,
-		TargetPort:  targetPort,
-		Domain:      domain,
-		URL:         fmt.Sprintf("https://%s-%s.example.test", sandboxName, serviceName),
-		Workspace:   workspace,
+		ID:         "endpoint-" + serviceName,
+		Sandbox:    sandboxName,
+		Name:       serviceName,
+		TargetPort: targetPort,
+		Domain:     domain,
+		URL:        fmt.Sprintf("https://%s-%s.example.test", sandboxName, serviceName),
+		Workspace:  workspace,
 	}
 	c.endpoints[serviceKey(workspace, sandboxName, serviceName)] = endpoint
 	copy := *endpoint
@@ -85,10 +85,14 @@ func (c *fakeServiceClient) Get(_ context.Context, workspace, sandboxName, servi
 	return &copy, nil
 }
 
-func (c *fakeServiceClient) List(_ context.Context, workspace, sandboxName string, _ ...openshellv1.ListOptions) ([]*openshellv1.ServiceEndpoint, error) {
+func (c *fakeServiceClient) List(_, _ string, _ ...openshellv1.ListOptions) (*openshellv1.Pager[*openshellv1.ServiceEndpoint], error) {
+	return nil, &openshellv1.StatusError{Code: openshellv1.ErrorUnimplemented, Message: "use ListAll"}
+}
+
+func (c *fakeServiceClient) ListAll(_ context.Context, workspace, sandboxName string, _ ...openshellv1.ListOptions) ([]*openshellv1.ServiceEndpoint, error) {
 	result := []*openshellv1.ServiceEndpoint{}
 	for _, endpoint := range c.endpoints {
-		if endpoint.Workspace == workspace && endpoint.SandboxName == sandboxName {
+		if endpoint.Workspace == workspace && endpoint.Sandbox == sandboxName {
 			copy := *endpoint
 			result = append(result, &copy)
 		}
@@ -96,13 +100,13 @@ func (c *fakeServiceClient) List(_ context.Context, workspace, sandboxName strin
 	return result, nil
 }
 
-func (c *fakeServiceClient) Delete(_ context.Context, workspace, sandboxName, serviceName string) error {
+func (c *fakeServiceClient) Delete(_ context.Context, workspace, sandboxName, serviceName string, _ ...openshellv1.DeleteOptions) (*openshellv1.DeletionResult, error) {
 	key := serviceKey(workspace, sandboxName, serviceName)
 	if _, exists := c.endpoints[key]; !exists {
-		return &openshellv1.StatusError{Code: openshellv1.ErrorNotFound, Message: "service not found"}
+		return nil, &openshellv1.StatusError{Code: openshellv1.ErrorNotFound, Message: "service not found"}
 	}
 	delete(c.endpoints, key)
-	return nil
+	return &openshellv1.DeletionResult{Outcome: openshellv1.DeletionCompleted}, nil
 }
 
 func (f *fakeOpenShellClientFactory) NewClient(gateway appsv1alpha1.SandboxGatewaySpec) (*OpenShellClientSession, error) {
@@ -635,7 +639,9 @@ network_policies:
     endpoints:
       - host: minio.default.svc.cluster.local
         port: 9000
+        tls: skip
         enforcement: enforce
+        access: full
         allowed_ips: [10.0.0.0/8]
     binaries:
       - path: "**"
@@ -648,6 +654,9 @@ network_policies:
 		Expect(rule.Endpoints).To(HaveLen(1))
 		Expect(rule.Endpoints[0].Host).To(Equal("minio.default.svc.cluster.local"))
 		Expect(rule.Endpoints[0].Port).To(Equal(uint32(9000)))
+		Expect(rule.Endpoints[0].TLS).To(Equal(openshellv1.NetworkTLSModeSkip))
+		Expect(rule.Endpoints[0].Enforcement).To(Equal(openshellv1.NetworkEnforcementModeEnforce))
+		Expect(rule.Endpoints[0].Access).To(Equal(openshellv1.NetworkAccessPresetFull))
 		Expect(rule.Endpoints[0].AllowedIPs).To(Equal([]string{"10.0.0.0/8"}))
 		Expect(rule.Binaries).To(HaveLen(1))
 		Expect(rule.Binaries[0].Path).To(Equal("**"))
@@ -661,7 +670,7 @@ network_policies:
 		Expect(policy.NetworkPolicies).To(HaveKey("sonataflow"))
 		rule := policy.NetworkPolicies["sonataflow"]
 		Expect(rule.Endpoints).To(ConsistOf(openshellv1.PolicyNetworkEndpoint{
-			Host: "pipeline.default.svc.cluster.local", Port: 443, Protocol: "rest", Enforcement: "enforce", Access: "full",
+			Host: "pipeline.default.svc.cluster.local", Port: 443, Protocol: "rest", Enforcement: openshellv1.NetworkEnforcementModeEnforce, Access: openshellv1.NetworkAccessPresetFull,
 		}))
 		Expect(rule.Binaries).To(ConsistOf(openshellv1.PolicyNetworkBinary{Path: "**"}))
 	})
@@ -689,5 +698,26 @@ func TestResolvedGatewayLocationSurvivesDefaultChange(t *testing.T) {
 	}
 	if request.Status.Gateway.Endpoint != "http://old-gateway.test:8080" {
 		t.Fatalf("recorded gateway changed unexpectedly: %q", request.Status.Gateway.Endpoint)
+	}
+}
+
+func TestDeletionComplete(t *testing.T) {
+	cases := []struct {
+		name   string
+		result *openshellv1.DeletionResult
+		want   bool
+	}{
+		{"nil", nil, false},
+		{"unspecified", &openshellv1.DeletionResult{Outcome: openshellv1.DeletionUnspecified}, false},
+		{"accepted", &openshellv1.DeletionResult{Outcome: openshellv1.DeletionAccepted}, false},
+		{"completed", &openshellv1.DeletionResult{Outcome: openshellv1.DeletionCompleted}, true},
+		{"already absent", &openshellv1.DeletionResult{Outcome: openshellv1.DeletionAlreadyAbsent}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deletionComplete(tc.result); got != tc.want {
+				t.Fatalf("deletionComplete(%v) = %t, want %t", tc.result, got, tc.want)
+			}
+		})
 	}
 }

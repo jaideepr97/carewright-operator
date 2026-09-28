@@ -498,10 +498,14 @@ func (r *SandboxRequestReconciler) releaseProvider(ctx context.Context, request 
 	if provider.Annotations[providerSourceKey] != source {
 		return true, nil
 	}
-	if err := session.Client.Providers().Delete(ctx, registration.Workspace, registration.Name); err != nil && !openshellv1.IsNotFound(err) {
+	result, err := session.Client.Providers().Delete(ctx, registration.Workspace, registration.Name)
+	if openshellv1.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
 		return false, fmt.Errorf("delete OpenShell provider %q: %w", registration.Name, err)
 	}
-	return true, nil
+	return deletionComplete(result), nil
 }
 
 func requestManagesProvider(request *appsv1alpha1.SandboxRequest, registration appsv1alpha1.ManagedProviderStatus) bool {
@@ -604,8 +608,12 @@ func (r *SandboxRequestReconciler) reconcileServices(
 		if _, keep := desired[previous.Name]; keep {
 			continue
 		}
-		if err := session.Client.Services().Delete(ctx, workspace(request), sandboxName, previous.Name); err != nil && !openshellv1.IsNotFound(err) {
+		result, err := session.Client.Services().Delete(ctx, workspace(request), sandboxName, previous.Name)
+		if err != nil && !openshellv1.IsNotFound(err) {
 			return nil, fmt.Errorf("delete stale service %q: %w", previous.Name, err)
+		}
+		if err == nil && !deletionComplete(result) {
+			return nil, fmt.Errorf("deletion of stale service %q is pending", previous.Name)
 		}
 	}
 
@@ -614,8 +622,12 @@ func (r *SandboxRequestReconciler) reconcileServices(
 		endpoint, err := session.Client.Services().Get(ctx, workspace(request), sandboxName, service.Name)
 		needsExposure := openshellv1.IsNotFound(err)
 		if err == nil && (endpoint.TargetPort != uint32(service.TargetPort) || !endpoint.Domain || endpoint.URL == "") { // #nosec G115 -- CRD validation limits the port to uint16 range.
-			if err := session.Client.Services().Delete(ctx, workspace(request), sandboxName, service.Name); err != nil && !openshellv1.IsNotFound(err) {
+			result, err := session.Client.Services().Delete(ctx, workspace(request), sandboxName, service.Name)
+			if err != nil && !openshellv1.IsNotFound(err) {
 				return nil, fmt.Errorf("replace service %q: %w", service.Name, err)
+			}
+			if err == nil && !deletionComplete(result) {
+				return nil, fmt.Errorf("deletion of service %q is pending", service.Name)
 			}
 			needsExposure = true
 		}
@@ -735,7 +747,10 @@ func (r *SandboxRequestReconciler) createSandbox(
 			},
 		})
 		if err != nil {
-			deleteErr := session.Client.Sandboxes().Delete(ctx, workspace(request), name)
+			result, deleteErr := session.Client.Sandboxes().Delete(ctx, workspace(request), name)
+			if deleteErr == nil && !deletionComplete(result) {
+				deleteErr = fmt.Errorf("sandbox %q deletion is pending", name)
+			}
 			return sandboxObservation{}, errors.Join(fmt.Errorf("set sandbox approval mode: %w", err), deleteErr)
 		}
 	}
@@ -749,11 +764,21 @@ func (r *SandboxRequestReconciler) deleteSandbox(ctx context.Context, request *a
 	}
 	defer closeSession(session)
 
-	err = session.Client.Sandboxes().Delete(ctx, workspace(request), name)
+	result, err := session.Client.Sandboxes().Delete(ctx, workspace(request), name)
 	if openshellv1.IsNotFound(err) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if !deletionComplete(result) {
+		return fmt.Errorf("sandbox %q deletion is pending", name)
+	}
+	return nil
+}
+
+func deletionComplete(result *openshellv1.DeletionResult) bool {
+	return result != nil && (result.Outcome == openshellv1.DeletionCompleted || result.Outcome == openshellv1.DeletionAlreadyAbsent)
 }
 
 func resourceLimits(resources appsv1alpha1.SandboxResources) map[string]any {
@@ -795,6 +820,9 @@ func decodeSandboxPolicy(data []byte) (*openshellv1.SandboxPolicy, error) {
 			delete(document, oldName)
 		}
 	}
+	if err := normalizePolicyEndpointEnums(document); err != nil {
+		return nil, err
+	}
 	protoData, err := json.Marshal(document)
 	if err != nil {
 		return nil, fmt.Errorf("encode OpenShell policy document: %w", err)
@@ -803,7 +831,7 @@ func decodeSandboxPolicy(data []byte) (*openshellv1.SandboxPolicy, error) {
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(protoData, &protoPolicy); err != nil {
 		return nil, fmt.Errorf("validate OpenShell policy: %w", err)
 	}
-	canonical, err := protojson.Marshal(&protoPolicy)
+	canonical, err := (protojson.MarshalOptions{UseEnumNumbers: true}).Marshal(&protoPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("encode validated OpenShell policy: %w", err)
 	}
@@ -812,6 +840,46 @@ func decodeSandboxPolicy(data []byte) (*openshellv1.SandboxPolicy, error) {
 		return nil, fmt.Errorf("convert OpenShell policy to SDK types: %w", err)
 	}
 	return &policy, nil
+}
+
+func normalizePolicyEndpointEnums(document map[string]json.RawMessage) error {
+	raw, ok := document["network_policies"]
+	if !ok {
+		return nil
+	}
+	var rules map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rules); err != nil {
+		return fmt.Errorf("decode OpenShell network policies: %w", err)
+	}
+	aliases := map[string]map[string]int{
+		"tls":         {"auto": 0, "skip": 1, "terminate": 2, "passthrough": 3},
+		"enforcement": {"enforce": 1, "audit": 2},
+		"access":      {"read_only": 1, "read_write": 2, "full": 3},
+	}
+	for _, rule := range rules {
+		rawEndpoints, ok := rule["endpoints"]
+		if !ok {
+			continue
+		}
+		var endpoints []map[string]json.RawMessage
+		if err := json.Unmarshal(rawEndpoints, &endpoints); err != nil {
+			return fmt.Errorf("decode OpenShell network endpoints: %w", err)
+		}
+		for _, endpoint := range endpoints {
+			for field, values := range aliases {
+				var value string
+				if err := json.Unmarshal(endpoint[field], &value); err != nil {
+					continue
+				}
+				if numeric, ok := values[value]; ok {
+					endpoint[field], _ = json.Marshal(numeric)
+				}
+			}
+		}
+		rule["endpoints"], _ = json.Marshal(endpoints)
+	}
+	document["network_policies"], _ = json.Marshal(rules)
+	return nil
 }
 
 func mergeNetworkAccess(policy *openshellv1.SandboxPolicy, access []appsv1alpha1.SandboxNetworkAccessSpec) *openshellv1.SandboxPolicy {
@@ -835,8 +903,8 @@ func mergeNetworkAccess(policy *openshellv1.SandboxPolicy, access []appsv1alpha1
 				Host:        endpoint.Host,
 				Port:        uint32(endpoint.Port), // #nosec G115 -- CRD validation limits the port to uint16 range.
 				Protocol:    protocol,
-				Enforcement: "enforce",
-				Access:      "full",
+				Enforcement: openshelltypes.NetworkEnforcementModeEnforce,
+				Access:      openshelltypes.NetworkAccessPresetFull,
 			}},
 			Binaries: []openshellv1.PolicyNetworkBinary{{Path: "**"}},
 		}
